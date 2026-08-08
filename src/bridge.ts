@@ -99,6 +99,7 @@ export type Req =
   | { cmd: "goto"; q: string }
   | { cmd: "find"; q: string }
   | { cmd: "nearby"; q: string }
+  | { cmd: "seed"; q: string; places: { id: string; name: string; kind: string; lat: number; lon: number }[] }
   | { cmd: "select"; n: number }
   | { cmd: "route"; to: string; from?: string; mode?: Mode }
   | { cmd: "isochrone"; minutes: number; from?: string; mode?: Mode }
@@ -145,3 +146,25 @@ export const CATEGORIES = [
   "station",
   "park",
 ] as const;
+
+/** The same categories, in the basemap tiles' own vocabulary.
+ *
+ * OpenMapTiles labels its `poi` layer with a `class` (and a finer `subclass`) taken from
+ * the OSM tags — so the map on screen already knows which dots are fuel stations. This
+ * table is the join between what a person taps and what the tile calls it; anything not
+ * listed simply has no head start and waits for the server.
+ *
+ * Both class and subclass are matched, because the schema puts the useful word in
+ * different places depending on the category. */
+export const TILE_CLASSES: Record<string, string[]> = {
+  cafes: ["cafe"],
+  restaurants: ["restaurant", "fast_food"],
+  hotels: ["lodging", "hotel", "hostel", "guest_house"],
+  supermarket: ["grocery", "supermarket", "convenience"],
+  pharmacy: ["pharmacy"],
+  fuel: ["fuel"],
+  parking: ["parking"],
+  atm: ["atm", "bank"],
+  station: ["railway", "bus", "station", "subway", "bus_stop"],
+  park: ["park"],
+};

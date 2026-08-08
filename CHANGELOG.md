@@ -29,6 +29,27 @@ A world map on one screen a human and an agent share.
 - **Export** to GeoJSON or GPX: pins, results, the route, the reachable area.
 - **Thirteen verbs**, each of them also a control in the window, over one shared state.
 
+### The window
+
+- **The camera stops fighting you.** Every snapshot used to re-frame, which looked right
+  and was unusable: with a route drawn, panning along it to read the next turn made the
+  reply to your own pan snap the camera back to the route's bounding box. The map now moves
+  when the *subject* changes — a new route, a different place opened — and panning is not a
+  change of subject.
+- **The panel hides**, because a map app is mostly map. What it covers is also what framing
+  keeps clear of, so hiding it gives shapes the whole window.
+- **Categories answer instantly.** The dots for fuel stations and pharmacies are already in
+  the tiles on screen — OSM tagged them, OpenMapTiles carries the classification — so a tap
+  is answered from what is already drawn, in the same frame, and the complete list with
+  addresses replaces it a moment later. Those results go through the shared state like
+  everything else, so the agent sees the head start too.
+- **The session survives a restart**: the view and the pins come back, the search does not.
+  Reopening in the mid-Atlantic was not a fresh start, it was amnesia — and it made every
+  category button fail, because "what is nearby" has no answer in an ocean.
+- **`atm` used to time out.** "Nearby" reached as far as 20 km, which in a city is tens of
+  thousands of features; the radius is capped at 5 km and Overpass gets a budget it can
+  actually meet.
+
 ### The camera
 
 The first clapp with a piece of state that moves *continuously*. A human dragging the map

@@ -84,6 +84,11 @@ const VALHALLA_GAP: Duration = Duration::from_millis(400);
 /// costs a great deal more than one call anywhere else here. It is the widest gap for that
 /// reason, and `nearby` is the only thing that ever uses it.
 const OVERPASS_GAP: Duration = Duration::from_millis(1500);
+/// Overpass's own budget, and the client's. The query asks the server for `OVERPASS_BUDGET`
+/// seconds and we wait a little longer than that, so a slow answer is still an answer —
+/// giving up first would mean paying for the work and discarding it.
+const OVERPASS_BUDGET: u32 = 25;
+const OVERPASS_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long an answer stays good. Places move on the scale of months, so a repeat search
 /// inside ten minutes is free; an address for a fixed coordinate is good for hours; a route
@@ -284,8 +289,12 @@ struct Service {
 
 impl Service {
     fn new(gap: Duration, ttl: Duration) -> Result<Service> {
+        Service::with_timeout(gap, ttl, TIMEOUT)
+    }
+
+    fn with_timeout(gap: Duration, ttl: Duration, timeout: Duration) -> Result<Service> {
         Ok(Service {
-            http: reqwest::Client::builder().timeout(TIMEOUT).user_agent(UA).build()?,
+            http: reqwest::Client::builder().timeout(timeout).user_agent(UA).build()?,
             gate: Gate::new(gap),
             ttl,
             cache: Mutex::new(HashMap::new()),
@@ -657,7 +666,11 @@ pub struct Overpass {
 
 impl Overpass {
     pub fn new() -> Result<Overpass> {
-        Ok(Overpass { svc: Service::new(OVERPASS_GAP, SEARCH_TTL)? })
+        // Its own, longer client timeout. Overpass is given a server-side budget in the
+        // query itself; giving up before that budget expires means paying for the work and
+        // then throwing the answer away — and, because a timeout looks like a failure,
+        // trying the mirror and paying for it twice.
+        Ok(Overpass { svc: Service::with_timeout(OVERPASS_GAP, SEARCH_TTL, OVERPASS_TIMEOUT)? })
     }
 
     /// Everything tagged `key=value` within `radius_m` of a point.
@@ -672,7 +685,7 @@ impl Overpass {
         // outline, not a point, and asking only for nodes silently misses most of them.
         // `out center` gives each one a single coordinate, which is what a pin needs.
         let q = format!(
-            "[out:json][timeout:20];nwr{filter}(around:{radius_m},{:.5},{:.5});out center {};",
+            "[out:json][timeout:{OVERPASS_BUDGET}];nwr{filter}(around:{radius_m},{:.5},{:.5});out center {};",
             at[0],
             at[1],
             RESULT_LIMIT * 3

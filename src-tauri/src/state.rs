@@ -120,11 +120,14 @@ impl AppState {
     /// How far out "nearby" reaches: half of what is on screen.
     ///
     /// That is the honest reading of the word — somebody looking at one neighbourhood means
-    /// this neighbourhood, and somebody looking at a whole city means the city. Bounded at
-    /// both ends: below 300 m a radius query returns a street, and above 20 km it starts
-    /// costing the database real work for an answer nobody asked for.
+    /// this neighbourhood, and somebody looking at a whole city means the city.
+    ///
+    /// Bounded at both ends, and the upper bound is not cosmetic: `atm` inside 20 km of
+    /// Kadıköy is tens of thousands of features and the query timed out, which reads to a
+    /// user as "the button is broken". 5 km is the largest radius that answers reliably for
+    /// the densest categories, and past that "nearby" is not what anybody meant anyway.
     pub fn radius_m(&self) -> u32 {
-        ((screen_km(&self.view) * 1000.0 / 2.0) as u32).clamp(300, 20_000)
+        ((screen_km(&self.view) * 1000.0 / 2.0) as u32).clamp(300, 5_000)
     }
 
     pub fn busy(&mut self, what: Option<&str>) {
@@ -140,9 +143,16 @@ impl AppState {
     /// Point the map somewhere, and decide whether that is worth telling the agent about.
     ///
     /// Called for every settled camera (the window debounces its `moveend`), so it is on
-    /// the hot path of somebody dragging a map around. The signal is a `context` one — it
-    /// rides the agent's next turn rather than taking one — but "lossless" does not mean
-    /// "every twitch", so [`worth_announcing`] is the filter.
+    /// the hot path of somebody dragging a map around.
+    ///
+    /// The signal is `view`, and it is **buffered**: what the human is looking at right now
+    /// is not news to be delivered at some later turn, it is the context their next
+    /// sentence is about. "What's the name of this street?" only makes sense if the view
+    /// rides the prompt that asks it. A queued `context` signal would arrive describing
+    /// somewhere they have already left.
+    ///
+    /// Buffered still does not mean "every twitch" — [`worth_announcing`] is the filter, so
+    /// what rides along is the area they settled on, not the eleven they scrolled past.
     pub fn look_at(&mut self, lat: f64, lon: f64, zoom: f64, actor: Actor) -> Vec<Emit> {
         let moved = View { lat, lon, zoom, name: String::new() };
         // A pan does not rename the area; only a lookup does (`name_view`). Keeping the old
@@ -159,7 +169,7 @@ impl AppState {
         }
         self.announced = Some(self.view.clone());
         vec![Emit {
-            id: "view.changed".into(),
+            id: "view".into(),
             target: Vec::new(),
             payload: json!({
                 "lat": round6(self.view.lat),
@@ -325,6 +335,64 @@ impl AppState {
             other => Err(format!(
                 "clear what? results, route, reach, pins, or all — not \"{other}\""
             )),
+        }
+    }
+
+    // ── what survives a restart ──────────────────────────────────────────────
+
+    /// The two things it would be rude to forget: where the human had the map, and what
+    /// they kept.
+    ///
+    /// Results and routes are deliberately NOT here — they are answers to a question asked
+    /// at a moment, and restoring a stale route would be pretending to know something.
+    /// The view is different: reopening the app in the mid-Atlantic when you were last
+    /// looking at Kadıköy is not a fresh start, it is amnesia. It also made every category
+    /// button fail on launch, because "what is nearby" has no answer in the middle of an
+    /// ocean.
+    ///
+    /// Pure: the file I/O belongs to `app.rs`, so these stay testable.
+    pub fn saved(&self) -> Value {
+        json!({
+            "view": {
+                "lat": round6(self.view.lat),
+                "lon": round6(self.view.lon),
+                "zoom": round2(self.view.zoom),
+                "name": self.view.name,
+            },
+            "pins": self.pins.iter().map(|p| json!({
+                "name": p.name, "lat": p.lat, "lon": p.lon, "note": p.note,
+            })).collect::<Vec<_>>(),
+        })
+    }
+
+    /// Take back what [`saved`](Self::saved) wrote. Anything missing or malformed is
+    /// skipped rather than fatal — a corrupt settings file must not cost you the app.
+    pub fn restore(&mut self, v: &Value) {
+        if let Some(view) = v.get("view") {
+            let f = |k: &str| view.get(k).and_then(Value::as_f64);
+            if let (Some(lat), Some(lon), Some(zoom)) = (f("lat"), f("lon"), f("zoom")) {
+                if (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon) {
+                    self.view = View {
+                        lat,
+                        lon,
+                        zoom: zoom.clamp(0.0, 22.0),
+                        name: view.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                    };
+                }
+            }
+        }
+        if let Some(pins) = v.get("pins").and_then(Value::as_array) {
+            self.pins = pins
+                .iter()
+                .filter_map(|p| {
+                    Some(Pin {
+                        name: p.get("name")?.as_str()?.to_string(),
+                        lat: p.get("lat")?.as_f64()?,
+                        lon: p.get("lon")?.as_f64()?,
+                        note: p.get("note").and_then(Value::as_str).unwrap_or("").to_string(),
+                    })
+                })
+                .collect();
         }
     }
 
@@ -707,6 +775,52 @@ mod tests {
         let x = s.gpx();
         assert!(x.contains("Bed &amp; Breakfast &lt;2&gt;"), "{x}");
         assert!(x.starts_with("<?xml"));
+    }
+
+    // ── what survives a restart ──────────────────────────────────────────────
+
+    #[test]
+    fn the_view_and_the_pins_come_back_but_the_search_does_not() {
+        let mut a = AppState::new();
+        a.look_at(40.9906, 29.0217, 14.0, Actor::Human);
+        a.name_view("Kadıköy".into());
+        a.pin(Pin { name: "home".into(), lat: 41.0, lon: 29.0, note: "n".into() }, Actor::Human);
+        a.set_results("cafe".into(), vec![place("Cafe", 41.0, 29.0)]);
+
+        let mut b = AppState::new();
+        b.restore(&a.saved());
+        assert_eq!(b.view().name, "Kadıköy");
+        assert!((b.view().lat - 40.9906).abs() < 1e-6);
+        assert_eq!(b.view().zoom, 14.0);
+        assert_eq!(b.pins().len(), 1);
+        assert_eq!(b.pins()[0].note, "n");
+        // A restored search would be an answer to a question asked at some other time.
+        assert!(b.results().is_empty());
+    }
+
+    /// The reason this exists at all: a fresh launch in the mid-Atlantic makes every
+    /// category button fail, because "what is nearby" has no answer in an ocean.
+    #[test]
+    fn a_restored_session_can_answer_nearby_immediately() {
+        let mut a = AppState::new();
+        assert!(a.bias().is_none(), "the default view is nowhere in particular");
+        a.look_at(40.9906, 29.0217, 14.0, Actor::Human);
+
+        let mut b = AppState::new();
+        b.restore(&a.saved());
+        assert!(b.bias().is_some(), "a restored session is somewhere");
+    }
+
+    #[test]
+    fn a_corrupt_session_file_costs_nothing() {
+        let mut s = AppState::new();
+        let before = s.view().clone();
+        s.restore(&json!({ "view": { "lat": "north", "lon": null }, "pins": "lots" }));
+        assert_eq!(s.view(), &before, "garbage must be ignored, not adopted");
+        s.restore(&json!({ "view": { "lat": 900.0, "lon": 0.0, "zoom": 5.0 } }));
+        assert_eq!(s.view(), &before, "there is no latitude 900");
+        s.restore(&json!({}));
+        assert_eq!(s.view(), &before);
     }
 
     #[test]

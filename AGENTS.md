@@ -32,9 +32,9 @@ returns the whole state (`--json` prints it), so you rarely need a second call.
 - **A place in your chat buffer** (`place.opened`) — they opened something in the window.
   It rides their next prompt, so "how far is that from the station?" is about *that*
   place. Do not look it up again; you already know where it is.
-- **A new view** (`view.changed`) — they moved the map somewhere genuinely different. It
-  reaches you at your next turn. Small pans are deliberately not reported; if you get one,
-  they went somewhere.
+- **The view** (`view`) — where they are looking right now. It rides their next prompt,
+  because that is what "this street", "here" and "this area" refer to. Small pans are
+  deliberately not reported; if you get one, they went somewhere.
 - **A pin change** (`pins.changed`) — they kept or dropped a place.
 
 There is no fourth one. The app cannot make you take a turn — if the human wants you, they

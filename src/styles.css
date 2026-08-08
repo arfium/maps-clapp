@@ -71,6 +71,57 @@ body,
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   overflow: hidden;
+  transition: transform 0.22s ease, opacity 0.22s ease;
+}
+
+/* Out of the way, not unmounted: the panel keeps its scroll position, its tab and the
+   text in its search box, so bringing it back is where you left it rather than a reset. */
+.hidden-panel .panel {
+  transform: translateX(calc(-100% - 20px));
+  opacity: 0;
+  pointer-events: none;
+}
+
+.collapse {
+  background: transparent;
+  color: var(--muted);
+  padding: 2px 7px;
+  font-size: 20px;
+  line-height: 1;
+  margin-right: -4px;
+}
+
+.collapse:hover {
+  color: var(--ink);
+  background: #eef5f2;
+}
+
+/* The way back in. Only the mark, because at 40px anything else is a smudge. */
+.reveal {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 4;
+  padding: 5px;
+  background: var(--panel);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transform: translateX(-16px);
+  pointer-events: none;
+  transition: transform 0.22s ease, opacity 0.22s ease;
+}
+
+.reveal .logo {
+  display: block;
+  width: 30px;
+  height: 30px;
+}
+
+.hidden-panel .reveal {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
 }
 
 .brand {
@@ -198,8 +249,15 @@ button.ghost:hover:not(:disabled) {
   border-radius: 999px;
 }
 
-.chips button:hover {
+.chips button:hover:not(:disabled) {
   background: #dcece6;
+}
+
+/* Disabled rather than absent: the categories are half of what this app does, and hiding
+   them would make the window look emptier than it is. The tooltip says what they need. */
+.chips button:disabled {
+  opacity: 0.45;
+  cursor: help;
 }
 
 /* ── tabs ────────────────────────────────────────────────────────────────── */
@@ -435,6 +493,7 @@ em {
   left: 50%;
   transform: translateX(-50%);
   max-width: min(560px, calc(100% - 400px));
+  transition: max-width 0.22s ease;
   padding: 8px 14px;
   border-radius: 999px;
   box-shadow: var(--shadow);
@@ -474,4 +533,10 @@ em {
 
 .note.bad {
   background: #8d2c14;
+}
+
+/* With the panel gone there is a whole window to use. */
+.hidden-panel .busy,
+.hidden-panel .note {
+  max-width: min(720px, calc(100% - 120px));
 }

@@ -14,12 +14,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { agentTint, cmd, prefetchAssets, useAsset, useSnapshot } from "@clappkit";
 import { MapSurface } from "./map";
 import {
-  CATEGORIES, EMPTY, coords, distance, duration,
+  CATEGORIES, EMPTY, TILE_CLASSES, coords, distance, duration,
   type Agent, type Mode, type Place, type Req, type State,
 } from "./bridge";
 
 /** What the core said about the last thing we asked for. */
 type Note = { text: string; bad?: boolean } | null;
+
+/** The panel's width plus its margins — what the map has to keep clear of it. Kept in step
+ *  with `.panel` in styles.css by hand, because the map needs the number before the panel
+ *  has been laid out. */
+const PANEL_WIDTH = 380;
 
 export default function App() {
   const { state, apply } = useSnapshot<State, Req>(EMPTY, { initial: { cmd: "state" } });
@@ -28,6 +33,14 @@ export default function App() {
   const [mode, setMode] = useState<Mode>("drive");
   const [routeTo, setRouteTo] = useState("");
   const [panel, setPanel] = useState<"results" | "route" | "pins">("results");
+  // The map is the point of a map app, so the panel gets out of the way on request. The
+  // map is told, because framing has to use the width it actually has.
+  const [hidden, setHidden] = useState(false);
+
+  // "Nearby" needs somewhere to be near. Zoomed out to a hemisphere there is no such
+  // place, and the category buttons used to fail with a sentence nobody reads — so they
+  // say what they need instead of pretending to work.
+  const somewhere = state.view.zoom >= 6;
 
   // Every action goes through here rather than `useSnapshot`'s `run`, because the core's
   // answer carries a sentence as well as the state — the export's path, the reason a place
@@ -71,6 +84,10 @@ export default function App() {
   }, [state]);
 
   useEffect(() => {
+    surface.current?.setPanelWidth(hidden ? 0 : PANEL_WIDTH);
+  }, [hidden]);
+
+  useEffect(() => {
     prefetchAssets(state.agents.map((a) => a.avatar));
   }, [state.agents]);
 
@@ -92,6 +109,27 @@ export default function App() {
     else if (state.results.length) setPanel("results");
   }, [state.route, state.results.length]);
 
+  // Tapping a category answers itself first.
+  //
+  // The dots for fuel stations and pharmacies are already in the basemap tiles on screen —
+  // OSM tagged them and OpenMapTiles carries that classification — so the honest first
+  // answer costs nothing and arrives in the same frame as the click. The real query goes
+  // out immediately behind it and replaces the list with something complete, addresses and
+  // all. When the tiles have nothing to say (zoomed out, or a category the schema does not
+  // carry), this simply does nothing and the server answers as before.
+  const category = (c: string) => {
+    const classes = TILE_CLASSES[c];
+    const seen = classes ? (surface.current?.poisNearby(classes, 40) ?? []) : [];
+    if (seen.length >= 3) {
+      void cmd<State, Req>({
+        cmd: "seed",
+        q: c,
+        places: seen.map(({ id, name, kind, lat, lon }) => ({ id, name, kind, lat, lon })),
+      }).then(apply);
+    }
+    void say({ cmd: "nearby", q: c });
+  };
+
   const search = (q: string) => {
     if (!q.trim()) return;
     typing.current = false;
@@ -99,8 +137,17 @@ export default function App() {
   };
 
   return (
-    <div className="app">
+    <div className={hidden ? "app hidden-panel" : "app"}>
       <div className="map" ref={host} />
+
+      <button
+        className="reveal"
+        title="Show the panel"
+        aria-label="Show the panel"
+        onClick={() => setHidden(false)}
+      >
+        <Logo />
+      </button>
 
       <aside className="panel">
         <header className="brand">
@@ -110,6 +157,14 @@ export default function App() {
             <span>{coords(state.view.lat, state.view.lon)} · z{state.view.zoom.toFixed(0)}</span>
           </div>
           <Agents agents={state.agents} />
+          <button
+            className="collapse"
+            title="Hide the panel"
+            aria-label="Hide the panel"
+            onClick={() => setHidden(true)}
+          >
+            ‹
+          </button>
         </header>
 
         <form
@@ -147,7 +202,12 @@ export default function App() {
 
         <div className="chips">
           {CATEGORIES.map((c) => (
-            <button key={c} onClick={() => void say({ cmd: "nearby", q: c })}>
+            <button
+              key={c}
+              disabled={!somewhere}
+              title={somewhere ? `What ${c} are around here` : "Find a place first — “nearby” needs somewhere to be near"}
+              onClick={() => category(c)}
+            >
               {c}
             </button>
           ))}
@@ -167,7 +227,11 @@ export default function App() {
 
         <div className="scroll">
           {panel === "results" && (
-            <Results state={state} onPick={(n) => void say({ cmd: "select", n })} />
+            <Results
+              state={state}
+              somewhere={somewhere}
+              onPick={(n) => void say({ cmd: "select", n })}
+            />
           )}
           {panel === "route" && (
             <RoutePanel
@@ -228,11 +292,14 @@ function Tab(props: {
   );
 }
 
-function Results({ state, onPick }: { state: State; onPick: (n: number) => void }) {
+function Results(props: { state: State; somewhere: boolean; onPick: (n: number) => void }) {
+  const { state, somewhere, onPick } = props;
   if (!state.results.length) {
     return (
       <p className="empty">
-        Search for a place, or tap a category to see what is around the middle of the map.
+        {somewhere
+          ? "Nothing here yet. Search for a place, or tap a category to see what is around the middle of the map."
+          : "Search for a place to start. The category buttons look around wherever the map is, so they wake up once you are somewhere."}
       </p>
     );
   }

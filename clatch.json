@@ -83,8 +83,8 @@
         "type": "buffered"
       },
       {
-        "id": "view.changed",
-        "type": "context"
+        "id": "view",
+        "type": "buffered"
       },
       {
         "id": "pins.changed",

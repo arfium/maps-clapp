@@ -39,6 +39,10 @@ const SAME_PLACE = { deg: 1e-4, zoom: 0.01 };
 
 const EMPTY_FC = { type: "FeatureCollection", features: [] } as const;
 
+/// The vector source the basemap style declares. Its `poi` layer carries OSM's own
+/// classification, already downloaded — see `poisNearby`.
+const BASEMAP_SOURCE = "openmaptiles";
+
 /// How much of the map's left edge the floating panel covers (its width plus its margins).
 /// Framing keeps shapes clear of it — capped against the actual canvas, see `padding`.
 const PANEL_CLEARANCE = 380;
@@ -52,6 +56,40 @@ const PANEL_CLEARANCE = 380;
  * window to the wrong place. When nothing will animate, jump instead. */
 function animates(): boolean {
   return typeof document === "undefined" || document.visibilityState === "visible";
+}
+
+/** What a snapshot is *about*, for the camera's purposes.
+ *
+ * Two snapshots with the same key are the same subject seen at two moments — a pan, a
+ * pushed roster update, the reply to a `view` — and none of those is a reason to move the
+ * map. A new route, a new reachable area, a different place opened, or a view the core
+ * itself set: those are. */
+function frameKey(s: State): string {
+  if (s.route) return `route:${s.route.from}>${s.route.to}:${s.route.mode}:${s.route.shape.length}`;
+  if (s.reach) return `reach:${s.reach.from}:${s.reach.minutes}:${s.reach.mode}`;
+  if (s.selected) return `place:${s.selected.id}`;
+  return `view:${s.view.lat.toFixed(4)},${s.view.lon.toFixed(4)},${s.view.zoom.toFixed(1)}`;
+}
+
+/** A place read straight out of the tiles: enough to show and to pin, no address. */
+export type TilePlace = {
+  id: string;
+  name: string;
+  kind: string;
+  lat: number;
+  lon: number;
+  /** Distance from the map's centre, for ordering. */
+  km: number;
+};
+
+/** Great-circle kilometres. The same formula as `geo.rs`, for the same reason: ordering. */
+function km(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const R = 6371.0088;
+  const r = (d: number) => (d * Math.PI) / 180;
+  const h =
+    Math.sin(r(bLat - aLat) / 2) ** 2 +
+    Math.cos(r(aLat)) * Math.cos(r(bLat)) * Math.sin(r(bLon - aLon) / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
 }
 
 export type MapEvents = {
@@ -71,8 +109,13 @@ export class MapSurface {
   private lastRev = -1;
   /** The last snapshot we framed the camera for, so a resize can frame it again. */
   private framed: State | null = null;
+  /** What that framing was *about* — see `frameKey`. The camera moves when this changes
+   *  and at no other time. */
+  private frameKey = "";
   /** Has the human moved the map since we last framed it? Then it is theirs, not ours. */
   private humanMoved = false;
+  /** How much of the left edge the panel covers right now; 0 when it is hidden. */
+  private clearance = PANEL_CLEARANCE;
 
   constructor(container: HTMLElement, ev: MapEvents) {
     this.map = new maplibregl.Map({
@@ -107,7 +150,10 @@ export class MapSurface {
     // somewhere themselves since, because then the frame is no longer theirs to move.
     new ResizeObserver(() => {
       this.map.resize();
-      if (this.framed && !this.humanMoved) this.frame(this.framed);
+      if (this.framed && !this.humanMoved) {
+        this.frameKey = ""; // the subject did not change; the window did
+        this.frame(this.framed);
+      }
     }).observe(container);
 
     // Dev only, and dropped from the shipped bundle with the rest of `import.meta.env.DEV`:
@@ -351,15 +397,86 @@ export class MapSurface {
     this.frame(s);
   }
 
-  /** Point the camera at whatever this snapshot is about. */
+  /** Point the camera at whatever this snapshot is about — **if that has changed**.
+   *
+   * This guard is the whole difference between a map you can use and one that fights you.
+   * Every snapshot re-frames looked correct and was unusable: a route is drawn, you pan
+   * along it to read the next turn, and the reply to the very `view` command reporting
+   * your pan arrives carrying the same route — so the camera snapped back to the route's
+   * bounding box, every time, for as long as the route existed.
+   *
+   * So the camera moves when the thing being looked at changes, and at no other time.
+   * Panning is not a change of subject. */
   private frame(s: State) {
+    const key = frameKey(s);
     this.framed = s;
+    if (key === this.frameKey) return;
+    this.frameKey = key;
     this.humanMoved = false;
     // A route or an area is about its whole shape, so frame it rather than centring on a
     // point somewhere along it.
     if (s.route && s.route.shape.length > 1) this.fit(s.route.shape);
     else if (s.reach && s.reach.ring.length > 3) this.fit(s.reach.ring);
     else this.goto(s.view.lat, s.view.lon, s.view.zoom);
+  }
+
+  /** What of this category is already on screen, nearest first.
+   *
+   * The basemap tiles are not just pictures: OpenMapTiles carries a `poi` layer with OSM's
+   * own classification on it — `fuel`, `cafe`, `pharmacy`, `railway` — and those tiles are
+   * already decoded and sitting in memory. So the answer to "what fuel is around here" is
+   * usually *already here*, and asking a server for it costs a second and a half to be
+   * told something the map is currently drawing.
+   *
+   * This is a head start, not the answer: tile POIs are thinned by rank at low zoom, cover
+   * only the loaded viewport, and carry no address. It returns nothing rather than
+   * something thin when the tiles are not carrying that category, and the real query
+   * (Overpass, in the core) replaces whatever this produced a moment later.
+   */
+  poisNearby(classes: string[], limit: number): TilePlace[] {
+    if (!this.ready) return [];
+    let feats: ReturnType<MLMap["querySourceFeatures"]>;
+    try {
+      feats = this.map.querySourceFeatures(BASEMAP_SOURCE, { sourceLayer: "poi" });
+    } catch {
+      // A style that carries no `poi` layer is a perfectly good style; it just cannot
+      // answer this. Fall through to the server.
+      return [];
+    }
+    const c = this.map.getCenter();
+    const want = new Set(classes);
+    const seen = new Set<string>();
+    const out: TilePlace[] = [];
+
+    for (const f of feats) {
+      const p = f.properties ?? {};
+      const cls = String(p.class ?? "");
+      const sub = String(p.subclass ?? "");
+      if (!want.has(cls) && !want.has(sub)) continue;
+      const name = String(p.name ?? p["name:latin"] ?? "").trim();
+      if (!name) continue;
+      const g = f.geometry;
+      if (g.type !== "Point") continue;
+      const [lon, lat] = g.coordinates as [number, number];
+      // Tiles overlap, so the same feature arrives more than once.
+      const id = `t${Math.round(lat * 1e5)},${Math.round(lon * 1e5)}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, name, kind: (sub || cls).replace(/_/g, " "), lat, lon, km: km(c.lat, c.lng, lat, lon) });
+    }
+    out.sort((a, b) => a.km - b.km);
+    return out.slice(0, limit);
+  }
+
+  /** Tell the map how much of its left edge is covered right now, so framing stays clear
+   *  of the panel — and uses the whole window once the panel is hidden. */
+  setPanelWidth(px: number) {
+    this.clearance = Math.max(0, px);
+    if (this.framed && !this.humanMoved) {
+      // Re-frame for the new shape of the window, but only if the view is still ours.
+      this.frameKey = "";
+      this.frame(this.framed);
+    }
   }
 
   private set(id: string, data: unknown) {
@@ -398,7 +515,7 @@ export class MapSurface {
   private padding() {
     const w = this.map.getCanvas().clientWidth || 0;
     const h = this.map.getCanvas().clientHeight || 0;
-    const side = Math.max(16, Math.min(PANEL_CLEARANCE, w * 0.35));
+    const side = Math.max(16, Math.min(this.clearance, w * 0.35));
     const edge = Math.max(12, Math.min(70, h * 0.12));
     return { top: edge, bottom: edge, left: side, right: edge };
   }
