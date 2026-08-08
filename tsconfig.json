@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "useDefineForClassFields": true,
+    "lib": ["ES2021", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": false,
+    // `@clappkit` is plain .ts source in the sibling clappkit checkout, resolved by a
+    // matching Vite alias. Because it lives OUTSIDE this project, its own imports do
+    // not resolve from here: `react` is mapped to the types package (mapping it to
+    // node_modules/react would bypass @types/react and make every hook `any`), and
+    // `@tauri-apps/api/*` to this app's copy. Vite does the same job with
+    // resolve.dedupe — keep the two in step.
+    "paths": {
+      "@clappkit": ["./clappkit/web/index.ts"],
+      "react": ["./node_modules/@types/react"],
+      "@tauri-apps/api/*": ["./node_modules/@tauri-apps/api/*"]
+    }
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,45 @@
+[package]
+name = "maps"
+version = "0.1.0"
+edition = "2021"
+description = "A world map on one screen a human and an agent share — cross-platform via clappkit + Tauri."
+license = "Apache-2.0"
+
+[[bin]]
+name = "maps"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `tauri` feature = the GUI half clappkit owns (icon, window verbs, the `asset` command,
+# the GUI<->CLI relay). It pulls the same tauri version + features declared below, so
+# opting in adds nothing to the dependency graph — it only moves code out of this app.
+clappkit = { path = "../clappkit", features = ["tauri"] }
+tauri = { version = "2", features = ["image-png"] }
+# "fs": exports (GeoJSON/GPX) are written off the worker threads. No "process" — this app
+# drives no child; everything it needs is an HTTPS call away.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+# Three open services: Photon (search), Nominatim (precise address + reverse), Valhalla
+# (routing, isochrones). rustls, never native-tls, so the build stays portable.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# clappkit pins the clatch crates to a private repository over ssh://. Building this app
+# must not depend on having a key for that repository — not on a CI runner, not on a fresh
+# machine, not in five years — so the crates are VENDORED at the pinned tag (vendor/clatch,
+# copied verbatim from tag v0.4.3) and this patch points cargo at that copy instead.
+#
+# clappkit itself is public now and rides as a plain submodule; only clatch still needs
+# this. The URL below has to match clappkit's dependency URL exactly, character for
+# character; that is how cargo knows which source it is replacing. Refresh with
+# scripts/vendor-clatch.sh <tag>. `cargo build --offline --locked` is the standing proof
+# that nothing private is reached.
+[patch."ssh://git@github.com/arfium/clatch.git"]
+clatch-core     = { path = "../vendor/clatch/crates/clatch-core" }
+clatch-ipc      = { path = "../vendor/clatch/crates/clatch-ipc" }
+clatch-pipe     = { path = "../vendor/clatch/crates/clatch-pipe" }
+clatch-registry = { path = "../vendor/clatch/crates/clatch-registry" }

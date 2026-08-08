@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(npm ci:*)",
+      "Bash(npm install:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(scripts/build.sh:*)",
+      "Bash(scripts/verify.sh:*)",
+      "Bash(scripts/package.sh:*)",
+      "Bash(scripts/validate.sh:*)",
+      "Bash(scripts/pack.sh:*)",
+      "Bash(scripts/render-icon.sh:*)",
+      
+      "Bash(clatch validate:*)",
+      "Bash(clatch pack:*)",
+      "Bash(clatch install:*)",
+      "Bash(clatch run:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
+    ]
+  }
+}

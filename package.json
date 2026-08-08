@@ -1,0 +1,35 @@
+{
+  "name": "maps-clapp",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "scripts/build.sh",
+    "build:web": "vite build",
+    "check": "node scripts/check-manifest.mjs",
+    "dev": "vite",
+    "icon": "scripts/render-icon.sh",
+    "pack": "scripts/pack.sh",
+    "package": "scripts/package.sh",
+    "tauri": "tauri",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "typecheck": "tsc --noEmit",
+    "validate": "scripts/validate.sh",
+    "verify": "scripts/verify.sh",
+    "vendor": "scripts/vendor-clatch.sh"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "maplibre-gl": "^5.9.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.5.3",
+    "vite": "^5.4.0"
+  }
+}

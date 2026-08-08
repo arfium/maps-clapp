@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Maps app icon.
+
+       This app wears no vendor's brand: the map is OpenStreetMap, rendered by MapLibre
+       from OpenFreeMap tiles, and none of those three is the product. So the mark is our
+       own — deliberately NOT a lookalike of Google's, Apple's or Yandex's, which is the
+       one thing an icon in this position must not be.
+
+       A pin, white, on a full-bleed tile at the house 0.225x corner radius. The tile
+       carries a faint graticule — the meridians and parallels of a globe seen from the
+       side. It is invisible at 32px and that is on purpose: what has to survive the Dock
+       is the silhouette, and what rewards a second look at 512px is the grid.
+
+       Teal into deep green, because every other map app on the machine is red or blue and
+       an icon's first job is to be the one you meant to click. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#14C08A"/>
+      <stop offset="1" stop-color="#046B52"/>
+    </linearGradient>
+    <clipPath id="tileclip">
+      <rect x="0" y="0" width="1024" height="1024" rx="230" ry="230"/>
+    </clipPath>
+    <filter id="lift" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="14" stdDeviation="22" flood-color="#00301F" flood-opacity="0.30"/>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="1024" height="1024" rx="230" ry="230" fill="url(#tile)"/>
+
+  <!-- The graticule: parallels as straight lines, meridians as ellipses, which is what a
+       sphere's grid actually projects to. Clipped to the tile so the wide ones do not
+       square off the corners. -->
+  <g clip-path="url(#tileclip)" fill="none" stroke="#FFFFFF" stroke-opacity="0.13" stroke-width="9">
+    <line x1="0" y1="300" x2="1024" y2="300"/>
+    <line x1="0" y1="512" x2="1024" y2="512" stroke-opacity="0.18"/>
+    <line x1="0" y1="724" x2="1024" y2="724"/>
+    <ellipse cx="512" cy="512" rx="512" ry="640"/>
+    <ellipse cx="512" cy="512" rx="330" ry="640"/>
+    <ellipse cx="512" cy="512" rx="140" ry="640"/>
+  </g>
+
+  <!-- The pin. One path, evenodd, so the hole is part of the mark rather than a white disc
+       laid on top of it — that way it stays a hole at every size and on every background. -->
+  <g filter="url(#lift)">
+    <path fill="#FFFFFF" fill-rule="evenodd" d="
+      M512 828
+      C512 828 288 570 288 424
+      a224 224 0 1 1 448 0
+      C736 570 512 828 512 828
+      Z
+      M512 512
+      a88 88 0 1 0 0 -176
+      a88 88 0 1 0 0 176
+      Z"/>
+  </g>
+</svg>

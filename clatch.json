@@ -1,0 +1,95 @@
+{
+  "manifestVersion": 1,
+  "id": "com.arfium.maps",
+  "name": "Maps",
+  "description": "A world map on one screen you and your agent share. Wherever either of you looks, searches or routes, the other is looking at it too.",
+  "about": "A map you can talk to. Search anywhere on earth, look a place up, route between two points, draw how far you can get in ten minutes, and keep pins — each of those is a CLI verb AND a control in the window, over one shared state. Your agent's `maps goto \"Shibuya Crossing\"` flies the human's window there; the place they open by hand rides along on their next prompt, so they can just say \"how far is that from the station?\". The map is OpenStreetMap through MapLibre and OpenFreeMap, searched with Photon and Nominatim, routed with Valhalla — all open, all keyless, no account to create and no quota to burn. The app never takes a turn on its own: talking to the agent is Clatch's job, not the app's.",
+  "tags": [
+    "maps",
+    "travel",
+    "productivity"
+  ],
+  "version": "0.1.0",
+  "protocol": 2,
+  "icon": "assets/icon.png",
+  "launch": {
+    "macos": "bin/maps",
+    "windows": "bin/maps.exe",
+    "linux": "bin/maps",
+    "args": [
+      "app"
+    ]
+  },
+  "connector": {
+    "cli": "maps",
+    "cliBin": "bin/maps",
+    "commands": [
+      {
+        "name": "goto",
+        "about": "find one place and fly the shared map to it"
+      },
+      {
+        "name": "find",
+        "about": "search places by name — the results drop onto the map as well as your terminal"
+      },
+      {
+        "name": "nearby",
+        "about": "what is around the middle of the map: cafes, fuel, pharmacies, anything OSM tags"
+      },
+      {
+        "name": "select",
+        "about": "open one result by number: its address, coordinates and what it is"
+      },
+      {
+        "name": "route",
+        "about": "route between two places by car, bike or on foot, with turn-by-turn steps"
+      },
+      {
+        "name": "isochrone",
+        "about": "draw how far you can get from a place in N minutes"
+      },
+      {
+        "name": "pin",
+        "about": "keep a place on the map — pins survive searches and routes"
+      },
+      {
+        "name": "pins",
+        "about": "list the kept pins with their coordinates"
+      },
+      {
+        "name": "clear",
+        "about": "clear results, the route, the isochrone or the pins"
+      },
+      {
+        "name": "export",
+        "about": "write what is on the map as GeoJSON or GPX; prints the file path"
+      },
+      {
+        "name": "status",
+        "about": "what both surfaces are looking at: the view, results, route, pins, agents"
+      },
+      {
+        "name": "focus",
+        "about": "focus the app window"
+      },
+      {
+        "name": "close",
+        "about": "quit the app"
+      }
+    ],
+    "signals": [
+      {
+        "id": "place.opened",
+        "type": "buffered"
+      },
+      {
+        "id": "view.changed",
+        "type": "context"
+      },
+      {
+        "id": "pins.changed",
+        "type": "context"
+      }
+    ]
+  }
+}

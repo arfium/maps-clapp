@@ -1,0 +1,28 @@
+.DS_Store
+*.app/
+*.log
+*.clapp
+*.clapp.sha256
+
+# Personal Claude Code settings (a shared .claude/settings.json IS committed)
+.claude/settings.local.json
+
+# Web + Rust build artifacts. `dist-web/` is the Vite bundle (embedded in the binary);
+# bare `dist/` is the old, ambiguous name and is ignored so a stale one cannot come back.
+node_modules/
+dist/
+dist-web/
+src-tauri/target/
+src-tauri/gen/
+
+# The assembled Clatch depot (scripts/package.sh) — reproducible, never committed
+/pkg/
+
+# vendor/clatch IS committed — see src-tauri/Cargo.toml's [patch] and the note in
+# vendor/clatch/Cargo.toml. Only the jlccli binary, which package.sh copies in from a local
+# build, stays out of the repo.
+/vendor/jlccli
+/vendor/jlccli.exe
+
+# the icon font is a build INPUT for scripts/extract-logo.py, cached, never shipped
+scripts/.iconfont.ttf

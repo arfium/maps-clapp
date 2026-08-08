@@ -1,0 +1,7 @@
+# Every change gets a maintainer review request automatically.
+* @berknylm
+
+# The transport and the design system are the reusable core — extra care.
+/native/Sources/clapp/ControlPipe.swift @berknylm
+/native/Sources/clapp/IPC.swift         @berknylm
+/native/Sources/clapp/Theme.swift       @berknylm
