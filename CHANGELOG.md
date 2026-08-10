@@ -29,6 +29,26 @@ A world map on one screen a human and an agent share.
 - **Export** to GeoJSON or GPX: pins, results, the route, the reachable area.
 - **Thirteen verbs**, each of them also a control in the window, over one shared state.
 
+### Trips
+
+`route` used to take two strings, guess a place for each and throw the previous answer
+away — so there was no such thing as a waypoint, and if the guess was wrong there was
+nothing to do about it but retype the name more precisely. There is no spelling of
+"Taksim" that means the square rather than the metro station.
+
+So a route is now a **trip**: an ordered list of stops in the shared state, with the line
+computed *from* them. `route "A" "B" "C"` plans one, `--add` extends it, `--rm <N>` prunes
+it, and every stop may be a name, an address, a coordinate, `#3` (a result already on
+screen) or one of your pins. Valhalla is asked once for the whole trip, so it optimises
+across the stops and answers with one leg per hop — each with its own distance, duration
+and turns.
+
+And an ambiguous name is neither guessed nor refused: the candidates go into the result
+list both surfaces already share, the stop shows as "choosing", and `maps select <N>` — or
+a click on the row — fills it and finishes the route. Several ambiguous stops queue up
+naturally, because the placeholders *are* the queue. How you travel became shared state
+too: an agent routing on foot no longer leaves the window showing "drive".
+
 ### The window
 
 - **The camera stops fighting you.** Every snapshot used to re-frame, which looked right

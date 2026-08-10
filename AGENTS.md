@@ -12,6 +12,8 @@ maps goto "Shibuya Crossing"      # flies their window there; names what is at t
 maps nearby "cafes"               # what is around it, NEAREST FIRST, on their map too
 maps select 3                     # opens one: address, coordinates, what it is
 maps route "Tokyo Station"        # from what is open, drawn on the line they can see
+maps route "A" "B" "C"            # a trip: any number of stops, in order
+maps route --add "#2"             # extend it with a result already on their screen
 maps pin "meet here" --note "9am" # kept; pins survive searches and routes
 maps export                       # GeoJSON of everything on the map
 ```
@@ -36,12 +38,21 @@ returns the whole state (`--json` prints it), so you rarely need a second call.
   because that is what "this street", "here" and "this area" refer to. Small pans are
   deliberately not reported; if you get one, they went somewhere.
 - **A pin change** (`pins.changed`) — they kept or dropped a place.
+- **A trip change** (`trip.changed`) — they added, removed or chose a stop.
 
 There is no fourth one. The app cannot make you take a turn — if the human wants you, they
 say so in Clatch. What arrives here is context, not a summons.
 
 ## Things that will trip you up
 
+- **A route is a TRIP.** `route "A" "B" "C"` goes through B; `--add` extends what is
+  already there instead of replacing it; `--rm <N>` prunes it. A stop can be a name, an
+  address, a coordinate, `#3` (a result on screen) or one of their pins — so once you have
+  searched, stop retyping names.
+- **An ambiguous stop is a question, not a failure.** "Taksim" is a square and a metro
+  station; when nothing wins clearly the candidates land in the result list and the trip
+  waits. Answer it with `maps select <N>` and the route finishes itself. Do not paper over
+  this by inventing a more specific string — the whole point is that you get to choose.
 - **Route times have no live traffic in them.** No open routing service has traffic data,
   so every duration is free-flow: right at 3am, optimistic at 6pm. If the answer depends on
   when they are travelling, say that it does.

@@ -16,7 +16,7 @@
 //!     only when it settles, and the app names the area only when the move was big enough
 //!     to be worth mentioning ([`name_the_view`]).
 
-use crate::geo::{Geo, Mode, Place};
+use crate::geo::{Found, Geo, Mode, Place};
 use crate::state::{plural, Actor, AppState, Pin};
 use crate::CLI;
 use clappkit::app::Reply;
@@ -283,52 +283,102 @@ pub async fn apply(ctx: &Ctx, req: &Value, caller: Option<String>) -> Reply {
             }
         }
 
+        // Opening a result — and, when the trip is waiting on one, the answer to that
+        // question. Deliberately the same verb: "which of these did you mean" is not a
+        // different action from "show me this one", and giving it its own verb would be a
+        // second thing to grant and a second thing to explain.
         "select" => {
             let n = req.get("n").and_then(Value::as_u64).unwrap_or(0) as usize;
             let mut s = ctx.state.lock().await;
-            match s.select(n, actor) {
-                Ok(p) => {
-                    s.say(format!("{} — {}", p.name, coords(&p)));
-                    drop(s);
-                    json!({ "ok": true, "message": p.label(), "place": p })
-                }
+            let picked = match s.select(n, actor) {
+                Ok(p) => p,
                 Err(e) => {
                     drop(s);
-                    bad(&e)
+                    return reply(ctx, bad(&e)).await;
                 }
+            };
+            if !s.resolve_stop(picked.clone()) {
+                s.say(format!("{} — {}", picked.name, coords(&picked)));
+                drop(s);
+                json!({ "ok": true, "message": picked.label(), "place": picked })
+            } else {
+                let next = s.awaiting().cloned();
+                let emits = s.trip_changed(actor);
+                drop(s);
+                ctx.control.emit_all(emits);
+                // Another stop still to choose: put ITS candidates up, same as before.
+                if let Some(a) = next {
+                    begin(ctx, &format!("looking for {}", a.query)).await;
+                    let bias = ctx.state.lock().await.bias();
+                    if let Ok(list) = ctx.geo.find(&a.query, bias).await {
+                        ctx.state.lock().await.set_results(a.query.clone(), list);
+                    }
+                }
+                finish_trip(ctx, Some(format!("stop {} is {}", picked_slot(ctx).await, picked.name))).await
             }
         }
 
+        // A trip, not a one-shot.
+        //
+        // `route "A" "B" "C"` builds it; `--add` extends it; `--rm` prunes it; a bare
+        // `route` recomputes what is already there. The stops are shared state, so the
+        // route is a *function* of them — which is the only reason adding a waypoint can
+        // work at all. It used to take two strings, guess a place for each, and throw the
+        // previous answer away.
         "route" => {
-            let (from, to) = (text("from"), text("to"));
-            let mode = Mode::parse(&text("mode")).unwrap_or_default();
-            if to.is_empty() {
-                bad("route to where? `maps route \"<from>\" \"<to>\"`")
-            } else {
-                begin(ctx, &format!("routing to {to}")).await;
-                match resolve_pair(ctx, &from, &to).await {
-                    Err(e) => fail(ctx, e).await,
-                    Ok((a, b)) => match ctx.geo.route(&a, &b, mode).await {
-                        Ok(r) => {
-                            let message = format!(
-                                "{} — {} {} from {} to {} ({} steps, no live traffic)",
-                                duration(r.secs),
-                                distance(r.km),
-                                mode.label(),
-                                r.from,
-                                r.to,
-                                r.steps.len(),
-                            );
-                            let mut s = ctx.state.lock().await;
-                            s.busy(None);
-                            s.set_route(r);
-                            s.say(message.clone());
-                            drop(s);
-                            json!({ "ok": true, "message": message })
-                        }
-                        Err(e) => fail(ctx, e).await,
-                    },
+            if let Some(m) = Mode::parse(&text("mode")) {
+                ctx.state.lock().await.set_mode(m);
+            }
+            let tokens: Vec<String> = req
+                .get("stops")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).map(|s| s.trim().to_string()).collect())
+                .unwrap_or_default();
+            let add = text("add");
+            let rm = req.get("rm").and_then(Value::as_u64).map(|n| n as usize);
+
+            if let Some(n) = rm {
+                let mut s = ctx.state.lock().await;
+                match s.remove_stop(n) {
+                    Ok(name) => {
+                        let emits = s.trip_changed(actor);
+                        drop(s);
+                        ctx.control.emit_all(emits);
+                        finish_trip(ctx, Some(format!("dropped {name}"))).await
+                    }
+                    Err(e) => {
+                        drop(s);
+                        bad(&e)
+                    }
                 }
+            } else if !add.is_empty() {
+                begin(ctx, &format!("adding {add}")).await;
+                // Adding to nothing means "from here to there" — the same shorthand as
+                // `route "<to>"`. Without it the first `--add` left a one-stop trip that
+                // could not be routed and gave no hint why.
+                if ctx.state.lock().await.trip().is_empty() {
+                    if let Ok(here) = anchor(ctx, "").await {
+                        ctx.state.lock().await.add_stop(here);
+                    }
+                }
+                push_stop(ctx, &add, actor).await;
+                let emits = ctx.state.lock().await.trip_changed(actor);
+                ctx.control.emit_all(emits);
+                finish_trip(ctx, None).await
+            } else if !tokens.is_empty() {
+                begin(ctx, "working out the route").await;
+                // One stop means "from where I am to there" — the shorthand that made the
+                // old `route "<to>"` worth typing, kept exactly.
+                let start = if tokens.len() == 1 { anchor(ctx, "").await.ok() } else { None };
+                ctx.state.lock().await.set_trip(start.into_iter().collect());
+                for q in &tokens {
+                    push_stop(ctx, q, actor).await;
+                }
+                let emits = ctx.state.lock().await.trip_changed(actor);
+                ctx.control.emit_all(emits);
+                finish_trip(ctx, None).await
+            } else {
+                finish_trip(ctx, None).await
             }
         }
 
@@ -453,6 +503,119 @@ fn bad(why: &str) -> Value {
     json!({ "ok": false, "error": why })
 }
 
+/// Which stop number was just filled, for the sentence both surfaces show.
+async fn picked_slot(ctx: &Ctx) -> usize {
+    let s = ctx.state.lock().await;
+    match s.awaiting() {
+        // Still choosing something: the one just filled is the one before it.
+        Some(a) => a.slot,
+        None => s.trip().len(),
+    }
+}
+
+/// Add one stop to the trip, from whatever the caller typed.
+///
+/// A stop may be a name, an address, a coordinate, `#3` (a result already on screen) or a
+/// pin's name — so once you have searched for something, you never have to type it again.
+/// When the name is genuinely ambiguous this does not guess: it parks a visible placeholder
+/// and puts the candidates in `results`, where a `select` from either surface fills it.
+async fn push_stop(ctx: &Ctx, q: &str, actor: Actor) {
+    // Already on screen, by number.
+    let n = q.strip_prefix('#').unwrap_or(q).parse::<usize>().ok();
+    if let Some(n) = n {
+        let hit = ctx.state.lock().await.results().get(n.wrapping_sub(1)).cloned();
+        if let Some(p) = hit {
+            ctx.state.lock().await.add_stop(p);
+            return;
+        }
+    }
+    // A pin, by the name the human gave it.
+    let pinned = ctx.state.lock().await.pins().iter().find(|p| p.name.eq_ignore_ascii_case(q)).cloned();
+    if let Some(p) = pinned {
+        ctx.state.lock().await.add_stop(Place {
+            id: format!("pin:{}", p.name),
+            name: p.name,
+            kind: "pin".into(),
+            lat: p.lat,
+            lon: p.lon,
+            ..Place::default()
+        });
+        return;
+    }
+
+    let bias = ctx.state.lock().await.bias();
+    match ctx.geo.resolve(q, bias).await {
+        Ok(Found::One(p)) => ctx.state.lock().await.add_stop(p),
+        Ok(Found::Many(list)) => {
+            let mut s = ctx.state.lock().await;
+            s.await_stop(q);
+            s.set_results(q.to_string(), list);
+            let _ = actor;
+        }
+        Err(e) => {
+            let mut s = ctx.state.lock().await;
+            s.say(e.to_string());
+        }
+    }
+}
+
+/// Whatever the trip needs next: a question, another stop, or the route itself.
+///
+/// One place decides, so `route`, `--add`, `--rm` and a `select` that completed a stop all
+/// end the same way — and neither surface can be looking at a trip the other has already
+/// routed.
+async fn finish_trip(ctx: &Ctx, prefix: Option<String>) -> Value {
+    let (awaiting, stops, mode, ready) = {
+        let s = ctx.state.lock().await;
+        (s.awaiting().cloned(), s.trip().to_vec(), s.mode(), s.trip_ready())
+    };
+
+    if let Some(a) = awaiting {
+        let n = ctx.state.lock().await.results().len();
+        let message = format!(
+            "{n} places match \"{}\" — pick one for stop {}: `maps select <N>`",
+            a.query,
+            a.slot + 1
+        );
+        let mut s = ctx.state.lock().await;
+        s.busy(None);
+        s.say(message.clone());
+        return json!({ "ok": true, "message": message, "choosing": a.slot + 1 });
+    }
+
+    if !ready {
+        let mut s = ctx.state.lock().await;
+        s.busy(None);
+        let message = match stops.len() {
+            0 => "no trip yet — `maps route \"<from>\" \"<to>\"`".to_string(),
+            _ => format!("the trip has one stop ({}) — add another", stops[0].name),
+        };
+        s.say(message.clone());
+        return json!({ "ok": true, "message": message });
+    }
+
+    match ctx.geo.route(&stops, mode).await {
+        Ok(r) => {
+            let message = format!(
+                "{}{} — {} {} · {} ({} step{}, no live traffic)",
+                prefix.map(|p| format!("{p}. ")).unwrap_or_default(),
+                duration(r.secs),
+                distance(r.km),
+                mode.label(),
+                r.stops.join(" → "),
+                r.steps(),
+                plural(r.steps()),
+            );
+            let mut s = ctx.state.lock().await;
+            s.busy(None);
+            s.set_route(r);
+            s.say(message.clone());
+            json!({ "ok": true, "message": message })
+        }
+        Err(e) => fail(ctx, e).await,
+    }
+}
+
 /// The place a verb should act on when the caller did not name one: what is open, else a
 /// pin at the middle of the map. "Here" is a real answer, and asking again would be rude.
 async fn anchor(ctx: &Ctx, named: &str) -> anyhow::Result<Place> {
@@ -473,15 +636,6 @@ async fn anchor(ctx: &Ctx, named: &str) -> anyhow::Result<Place> {
         lon: v.lon,
         ..Place::default()
     })
-}
-
-/// Both ends of a route. An empty `from` means "from what is open, or from here", which is
-/// what a person means when they say "how do I get to the station".
-async fn resolve_pair(ctx: &Ctx, from: &str, to: &str) -> anyhow::Result<(Place, Place)> {
-    let bias = ctx.state.lock().await.bias();
-    let a = anchor(ctx, from).await?;
-    let b = ctx.geo.place(to, bias).await?;
-    Ok((a, b))
 }
 
 /// Put a name on the area the human moved to, and push it.

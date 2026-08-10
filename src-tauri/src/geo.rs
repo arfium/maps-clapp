@@ -200,11 +200,41 @@ pub struct Route {
     pub mode: Mode,
     pub km: f64,
     pub secs: f64,
-    pub from: String,
-    pub to: String,
+    /// Every stop's name, in order — two for a simple route, more for a trip.
+    pub stops: Vec<String>,
     /// `[lon, lat]` pairs, in GeoJSON order so the frontend can hand it straight to a
     /// `LineString` without transposing anything.
     pub shape: Vec<[f64; 2]>,
+    /// One per consecutive pair of stops. A two-stop route has one leg, and everything
+    /// downstream can stop caring how many stops there were.
+    pub legs: Vec<Leg>,
+}
+
+impl Route {
+    pub fn from(&self) -> &str {
+        self.stops.first().map(String::as_str).unwrap_or("")
+    }
+
+    pub fn to(&self) -> &str {
+        self.stops.last().map(String::as_str).unwrap_or("")
+    }
+
+    pub fn steps(&self) -> usize {
+        self.legs.iter().map(|l| l.steps.len()).sum()
+    }
+}
+
+/// One hop of a trip: the stretch between two consecutive stops.
+///
+/// A route between two places has exactly one of these, so a trip is not a special case of
+/// a route — a route is a trip with one leg.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Leg {
+    pub from: String,
+    pub to: String,
+    pub km: f64,
+    pub secs: f64,
     pub steps: Vec<Step>,
 }
 
@@ -243,7 +273,10 @@ pub trait Geocoder {
 /// Getting from one coordinate to another.
 #[allow(async_fn_in_trait)]
 pub trait Router {
-    async fn route(&self, from: &Place, to: &Place, mode: Mode) -> Result<Route>;
+    /// Two stops or twenty — the router takes the whole trip, because splitting it into
+    /// pairs and stitching the answers back together would give a different (and worse)
+    /// route than asking once. A router optimises across the stops it is told about.
+    async fn route(&self, stops: &[Place], mode: Mode) -> Result<Route>;
     async fn reach(&self, at: &Place, minutes: u32, mode: Mode) -> Result<Reach>;
 }
 
@@ -844,29 +877,41 @@ impl Valhalla {
 }
 
 impl Router for Valhalla {
-    async fn route(&self, from: &Place, to: &Place, mode: Mode) -> Result<Route> {
+    async fn route(&self, stops: &[Place], mode: Mode) -> Result<Route> {
+        if stops.len() < 2 {
+            bail!("a route needs at least two stops");
+        }
+        // Every stop is a `break`: Valhalla ends a leg and issues an arrival instruction at
+        // each one. `through` would pass by without stopping, which is a different journey
+        // and not the one somebody who added a stop is asking for.
         let body = json!({
-            "locations": [
-                { "lat": from.lat, "lon": from.lon },
-                { "lat": to.lat, "lon": to.lon },
-            ],
+            "locations": stops
+                .iter()
+                .map(|p| json!({ "lat": p.lat, "lon": p.lon, "type": "break" }))
+                .collect::<Vec<_>>(),
             "costing": mode.costing(),
             "units": "kilometers",
             "directions_options": { "language": "en-US" },
         });
         let v = self.post("/route", body).await?;
         let trip = v.get("trip").ok_or_else(|| anyhow!("the routing service sent no trip"))?;
-        let legs = trip.get("legs").and_then(Value::as_array).cloned().unwrap_or_default();
+        let raw = trip.get("legs").and_then(Value::as_array).cloned().unwrap_or_default();
+        if raw.len() + 1 != stops.len() {
+            // Valhalla returns one leg per consecutive pair; anything else means the
+            // request and the answer are describing different journeys.
+            bail!("the routing service answered with {} legs for {} stops", raw.len(), stops.len());
+        }
 
         let mut shape: Vec<[f64; 2]> = Vec::new();
-        let mut steps: Vec<Step> = Vec::new();
-        for leg in &legs {
+        let mut legs: Vec<Leg> = Vec::new();
+        for (i, leg) in raw.iter().enumerate() {
             let base = shape.len();
             let pts = leg
                 .get("shape")
                 .and_then(Value::as_str)
                 .map(decode_polyline6)
                 .unwrap_or_default();
+            let mut steps = Vec::new();
             for m in leg.get("maneuvers").and_then(Value::as_array).cloned().unwrap_or_default() {
                 let instruction =
                     m.get("instruction").and_then(Value::as_str).unwrap_or("").trim().to_string();
@@ -877,13 +922,28 @@ impl Router for Valhalla {
                     instruction,
                     km: m.get("length").and_then(Value::as_f64).unwrap_or(0.0),
                     secs: m.get("time").and_then(Value::as_f64).unwrap_or(0.0),
+                    // Offset into the WHOLE trip's shape, not this leg's: the window draws
+                    // one line and highlights a stretch of it.
                     at: base + m.get("begin_shape_index").and_then(Value::as_u64).unwrap_or(0) as usize,
                 });
             }
+            let sum = leg.get("summary");
+            legs.push(Leg {
+                from: stops[i].name.clone(),
+                to: stops[i + 1].name.clone(),
+                km: sum.and_then(|s| s.get("length")).and_then(Value::as_f64).unwrap_or(0.0),
+                secs: sum.and_then(|s| s.get("time")).and_then(Value::as_f64).unwrap_or(0.0),
+                steps,
+            });
             shape.extend(pts);
         }
         if shape.is_empty() {
-            bail!("no way to get from {} to {} {}", from.name, to.name, mode.label());
+            bail!(
+                "no way to get from {} to {} {}",
+                stops[0].name,
+                stops[stops.len() - 1].name,
+                mode.label()
+            );
         }
 
         let sum = trip.get("summary");
@@ -891,10 +951,9 @@ impl Router for Valhalla {
             mode,
             km: sum.and_then(|s| s.get("length")).and_then(Value::as_f64).unwrap_or(0.0),
             secs: sum.and_then(|s| s.get("time")).and_then(Value::as_f64).unwrap_or(0.0),
-            from: from.name.clone(),
-            to: to.name.clone(),
+            stops: stops.iter().map(|p| p.name.clone()).collect(),
             shape,
-            steps,
+            legs,
         })
     }
 
@@ -1067,27 +1126,64 @@ impl Geo {
         Ok(ranked.into_iter().map(|(_, p)| p).collect())
     }
 
+    /// One place for a phrase — **or the candidates, when there is no one place.**
+    ///
+    /// This is the difference between a router you can use and one you have to guess at.
+    /// `route "Taksim"` used to take the top hit and go; if the top hit was the metro
+    /// station and you meant the square, there was nothing you could do about it except
+    /// retype the name more precisely, and there is no spelling of "Taksim" that means the
+    /// square. So an ambiguous query is not an error and not a guess: it comes back as a
+    /// list, the same list `find` produces, and the caller picks — `maps select 2`, or a
+    /// click on the row. Two surfaces, one mechanism, no new concept.
+    pub async fn resolve(&self, q: &str, bias: Bias) -> Result<Found> {
+        if let Some(p) = parse_coords(q) {
+            return Ok(Found::One(self.at(p).await));
+        }
+        let hits = self.find(q, bias).await?;
+        match hits.len() {
+            0 => bail!("nothing on the map matches \"{q}\""),
+            1 => Ok(Found::One(hits.into_iter().next().unwrap())),
+            _ => {
+                // One clear winner is not ambiguity. The test is the *margin*: an exact
+                // name match, or a score well clear of the runner-up, is an answer. A
+                // photo-finish between a square and a metro station is a question.
+                let scored = scores(q, bias, &hits);
+                let clear = scored[0] - scored[1] >= DECISIVE
+                    || hits[0].name.trim().eq_ignore_ascii_case(q.trim());
+                if clear {
+                    Ok(Found::One(hits.into_iter().next().unwrap()))
+                } else {
+                    Ok(Found::Many(hits))
+                }
+            }
+        }
+    }
+
+    /// A coordinate, named by whatever is there. Split out because `resolve` and `place`
+    /// both need it and neither should move the pin the caller actually asked for.
+    async fn at(&self, p: [f64; 2]) -> Place {
+        match self.photon.reverse(p[0], p[1]).await {
+            Ok(Some(mut hit)) => {
+                hit.lat = p[0];
+                hit.lon = p[1];
+                hit.extent = None;
+                hit
+            }
+            _ => Place {
+                id: format!("@{:.5},{:.5}", p[0], p[1]),
+                name: format!("{:.5}, {:.5}", p[0], p[1]),
+                kind: "coordinate".into(),
+                lat: p[0],
+                lon: p[1],
+                ..Place::default()
+            },
+        }
+    }
+
     /// One place for a phrase — the top hit, or a coordinate pair if that is what was typed.
     pub async fn place(&self, q: &str, bias: Bias) -> Result<Place> {
         if let Some(p) = parse_coords(q) {
-            return Ok(match self.photon.reverse(p[0], p[1]).await {
-                Ok(Some(mut hit)) => {
-                    // Keep the coordinate the caller actually named; the reverse hit is
-                    // there for its words, not to move the pin.
-                    hit.lat = p[0];
-                    hit.lon = p[1];
-                    hit.extent = None;
-                    hit
-                }
-                _ => Place {
-                    id: format!("@{:.5},{:.5}", p[0], p[1]),
-                    name: format!("{:.5}, {:.5}", p[0], p[1]),
-                    kind: "coordinate".into(),
-                    lat: p[0],
-                    lon: p[1],
-                    ..Place::default()
-                },
-            });
+            return Ok(self.at(p).await);
         }
         self.find(q, bias)
             .await?
@@ -1101,8 +1197,8 @@ impl Geo {
         self.photon.reverse(lat, lon).await
     }
 
-    pub async fn route(&self, from: &Place, to: &Place, mode: Mode) -> Result<Route> {
-        self.valhalla.route(from, to, mode).await
+    pub async fn route(&self, stops: &[Place], mode: Mode) -> Result<Route> {
+        self.valhalla.route(stops, mode).await
     }
 
     pub async fn reach(&self, at: &Place, minutes: u32, mode: Mode) -> Result<Reach> {
@@ -1122,7 +1218,8 @@ fn prominence(kind: &str) -> f64 {
     match k {
         "city" | "railway station" | "aerodrome" | "aeroway aerodrome" => 3.0,
         "town" | "train station" | "university" | "hospital" | "stadium" => 2.4,
-        "suburb" | "village" | "museum" | "attraction" | "castle" | "park" | "peak" => 1.9,
+        "suburb" | "village" | "museum" | "attraction" | "castle" | "park" | "peak"
+        | "square" | "plaza" | "monument" | "viewpoint" => 1.9,
         // The long tail of street furniture. These are real features and terrible answers
         // to "take me to X".
         "bus stop" | "steps" | "footway" | "platform" | "bench" | "crossing" | "junction"
@@ -1152,6 +1249,52 @@ fn name_echoes(query: &str, name: &str) -> bool {
     n.contains(&q) || q.contains(&n)
 }
 
+/// What a phrase resolved to: one place, or the shortlist to choose from.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Found {
+    One(Place),
+    Many(Vec<Place>),
+}
+
+/// How far ahead the best candidate has to be before we treat it as *the* answer rather
+/// than as the top of a list. Tuned against the case that motivated it: "Taksim" returns a
+/// square and a metro station of near-identical standing, and picking one for the user is
+/// how you end up routing them to the wrong place with total confidence.
+const DECISIVE: f64 = 0.8;
+
+/// The scores [`rank`] sorted by, for callers that need to know *how* clearly it won.
+fn scores(query: &str, bias: Bias, places: &[Place]) -> Vec<f64> {
+    let q = query.trim().to_lowercase();
+    let n = places.len().max(1) as f64;
+    places
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let name = p.name.to_lowercase();
+            // An exact name is the strongest signal there is, and it has to beat the
+            // prominence table outright: searching "Taksim Meydanı" returned two railway
+            // stations above the square that is literally called that, because a station
+            // outranks a square by category and "Taksim" is contained in the query. A name
+            // somebody typed in full is not a category question.
+            let name_match = if name == q {
+                2.5
+            } else if name.starts_with(&q) {
+                1.2
+            } else if name.contains(&q) {
+                0.7
+            } else {
+                0.0
+            };
+            let order = 0.5 * (1.0 - i as f64 / n);
+            let near = match bias {
+                Some(at) => -0.55 * (1.0 + km_between(at, [p.lat, p.lon])).log10(),
+                None => 0.0,
+            };
+            prominence(&p.kind) + name_match + order + near
+        })
+        .collect()
+}
+
 /// Put the likeliest answer first.
 ///
 /// Four signals, none of which is sufficient alone:
@@ -1164,34 +1307,41 @@ fn name_echoes(query: &str, name: &str) -> bool {
 ///   * distance, but only gently — log-scaled, so a cafe 200 m away does not outrank the
 ///     airport somebody clearly asked for.
 fn rank(query: &str, bias: Bias, places: Vec<Place>) -> Vec<Place> {
-    let q = query.trim().to_lowercase();
-    let n = places.len().max(1) as f64;
-    let mut scored: Vec<(f64, Place)> = places
-        .into_iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let name = p.name.to_lowercase();
-            let name_match = if name == q {
-                1.6
-            } else if name.starts_with(&q) {
-                1.1
-            } else if name.contains(&q) {
-                0.7
-            } else {
-                0.0
-            };
-            let order = 0.5 * (1.0 - i as f64 / n);
-            let near = match bias {
-                Some(at) => -0.55 * (1.0 + km_between(at, [p.lat, p.lon])).log10(),
-                None => 0.0,
-            };
-            (prominence(&p.kind) + name_match + order + near, p)
-        })
-        .collect();
+    let mut scored: Vec<(f64, Place)> =
+        scores(query, bias, &places).into_iter().zip(places).collect();
     // Descending, and stable enough that equal scores keep the index's order.
     scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-    scored.into_iter().map(|(_, p)| p).collect()
+    dedupe(scored.into_iter().map(|(_, p)| p).collect())
 }
+
+/// Drop the same place listed twice.
+///
+/// OSM maps one thing several ways — a station is a node, a building and two platforms —
+/// so an index happily returns "Taksim (railway station)" three times, metres apart. That
+/// is noise in a result list and *worse* in a list somebody is being asked to choose a
+/// destination from: two identical rows is a question with no answer. Same name, same
+/// kind, within [`SAME_THING_M`] of each other: keep the first, which ranking has already
+/// put in the best position.
+fn dedupe(places: Vec<Place>) -> Vec<Place> {
+    let mut kept: Vec<Place> = Vec::with_capacity(places.len());
+    for p in places {
+        let dup = kept.iter().any(|q| {
+            q.name.eq_ignore_ascii_case(&p.name)
+                && q.kind == p.kind
+                && km_between([q.lat, q.lon], [p.lat, p.lon]) * 1000.0 <= SAME_THING_M
+        });
+        if !dup {
+            kept.push(p);
+        }
+    }
+    kept
+}
+
+/// How close two features with the same name and kind have to be before they are one
+/// place. Measured, not guessed: the two "Taksim (railway station)" entries the live index
+/// returns are its two entrances, 168 m apart. Two genuinely different branches of a chain
+/// are kilometres apart, so this has a lot of room either side.
+const SAME_THING_M: f64 = 300.0;
 
 /// The handful of categories worth a real OSM tag, because the plain word is ambiguous in
 /// a search index ("bank" is a financial one and a river's edge; "pharmacy" hits brand
@@ -1398,6 +1548,28 @@ mod tests {
             ],
         );
         assert_eq!(out[0].name, "Louvre");
+    }
+
+    /// Two identical rows is a question nobody can answer.
+    #[test]
+    fn the_same_place_mapped_twice_is_listed_once() {
+        let station = |lat: f64, lon: f64| Place {
+            name: "Taksim".into(),
+            kind: "railway station".into(),
+            lat,
+            lon,
+            ..Place::default()
+        };
+        // The two entrances the live index actually returns: 168 m apart, one station.
+        let out = rank("Taksim", None, vec![station(41.03805, 28.98555), station(41.03678, 28.98663)]);
+        assert_eq!(out.len(), 1);
+
+        // Two branches of the same chain across town are two places.
+        let far = rank("Starbucks", None, vec![
+            Place { name: "Starbucks".into(), kind: "cafe".into(), lat: 41.0, lon: 29.0, ..Place::default() },
+            Place { name: "Starbucks".into(), kind: "cafe".into(), lat: 41.05, lon: 29.05, ..Place::default() },
+        ]);
+        assert_eq!(far.len(), 2);
     }
 
     #[test]

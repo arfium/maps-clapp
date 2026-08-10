@@ -29,9 +29,15 @@ usage:
   maps nearby "<what>"             what is around the middle of the map, NEAREST FIRST
       -n <N>                        print only the first N
   maps select <N>                  open result number N: address, coordinates, what it is
-  maps route "<to>"                route from what is open (or the map's centre) to <to>
-      --from "<place>"              start somewhere else instead
-      --mode drive|bike|walk        default drive
+  maps route "<to>"                from where you are to there
+  maps route "<from>" "<to>"       between two places
+  maps route "<from>" "<via>" … "<to>"
+                                    as many stops as you like, in order
+      --add "<place>"               append a stop to the trip you already have
+      --rm <N>                      drop stop N
+      --mode drive|bike|walk        how to travel (shared with the window)
+    a stop is a name, an address, "41.0082, 28.9784", #3 (a result on screen)
+    or the name of one of your pins
   maps isochrone <MINUTES>         draw how far you can get in that long
       --from "<place>"              default: what is open, or the map's centre
       --mode drive|bike|walk        default walk
@@ -51,6 +57,12 @@ usage:
 
   --json                            print the raw JSON answer instead of a table; every
                                     verb accepts it, and it always carries the whole state
+
+A route is a TRIP: the stops are shared state and the line is recomputed from them, so
+adding a waypoint keeps the journey instead of replacing it. When a stop's name is
+ambiguous — "Taksim" is a square AND a metro station — nothing is guessed: the candidates
+land in the result list you already know how to read, and `maps select <N>` fills that stop
+and finishes the route. The window shows the same list and a click does the same thing.
 
 `find` searches by name, in the search engine's own relevance order. `nearby` searches by
 category around the map's centre and orders by distance, because "what is nearby" is a
@@ -100,18 +112,17 @@ pub async fn run(args: Vec<String>) -> ! {
             None => usage("maps select <N>   (the number shown beside each result)"),
         },
 
-        "route" => {
-            if f.positional.is_empty() {
-                usage("maps route \"<to>\" [--from \"<place>\"] [--mode drive|bike|walk]");
-            }
-            json!({
-                "cmd": "route",
-                "to": f.positional.join(" "),
-                "from": f.value("--from").unwrap_or_default(),
-                "mode": f.value("--mode").unwrap_or_default(),
-                "agent": agent,
-            })
-        }
+        // Stops are POSITIONAL, and there can be any number of them. `route A B C` is a
+        // trip through B; `route B` is "from here to B". Flags edit a trip that already
+        // exists rather than describing a new one.
+        "route" => json!({
+            "cmd": "route",
+            "stops": f.positional,
+            "add": f.value("--add").unwrap_or_default(),
+            "rm": f.number("--rm"),
+            "mode": f.value("--mode").unwrap_or_default(),
+            "agent": agent,
+        }),
 
         "isochrone" => {
             let minutes = f.positional.first().and_then(|s| s.parse::<u64>().ok());
@@ -187,7 +198,16 @@ pub async fn run(args: Vec<String>) -> ! {
         "route" => print_route(&answer),
         "pins" => print_pins(&answer),
         "status" => print_status(&answer),
-        "goto" | "select" => print_place(&answer),
+        // A `select` that filled a waiting stop answers with a route, so it prints like
+        // one; otherwise it opened a place.
+        "select" => {
+            if answer["trip"].as_array().is_some_and(|t| t.len() >= 2) {
+                print_route(&answer)
+            } else {
+                print_place(&answer)
+            }
+        }
+        "goto" => print_place(&answer),
         _ => {
             if let Some(m) = answer["message"].as_str() {
                 println!("{m}");
@@ -202,9 +222,17 @@ pub async fn run(args: Vec<String>) -> ! {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn print_results(a: &Value, limit: Option<u64>) {
+    print_result_rows(a, limit, true)
+}
+
+/// `say` is false when the caller has already printed the sentence — a route that is
+/// waiting on a choice prints it once, not once per section.
+fn print_result_rows(a: &Value, limit: Option<u64>, say: bool) {
     let rows = a["results"].as_array().cloned().unwrap_or_default();
-    if let Some(m) = a["message"].as_str() {
-        println!("{m}");
+    if say {
+        if let Some(m) = a["message"].as_str() {
+            println!("{m}");
+        }
     }
     if rows.is_empty() {
         return;
@@ -248,19 +276,59 @@ fn print_place(a: &Value) {
 }
 
 fn print_route(a: &Value) {
-    let r = &a["route"];
     println!("{}", a["message"].as_str().unwrap_or(""));
-    let steps = r["steps"].as_array().cloned().unwrap_or_default();
-    if steps.is_empty() {
+    print_trip(a);
+
+    // A question rather than a route: show what there is to choose from.
+    if a["awaiting"].is_object() {
+        print_result_rows(a, Some(8), false);
+        return;
+    }
+
+    let legs = a["route"]["legs"].as_array().cloned().unwrap_or_default();
+    if legs.is_empty() {
+        return;
+    }
+    for (i, leg) in legs.iter().enumerate() {
+        // Only label the legs when there is more than one; a two-stop route is just a
+        // route, and a heading over it would be ceremony.
+        if legs.len() > 1 {
+            println!(
+                "\n── {}. {} → {}  ({} {})",
+                i + 1,
+                leg["from"].as_str().unwrap_or(""),
+                leg["to"].as_str().unwrap_or(""),
+                crate::app::distance(leg["km"].as_f64().unwrap_or(0.0)),
+                crate::app::duration(leg["secs"].as_f64().unwrap_or(0.0)),
+            );
+        } else {
+            println!();
+        }
+        for s in leg["steps"].as_array().cloned().unwrap_or_default() {
+            let km = s["km"].as_f64().unwrap_or(0.0);
+            println!(
+                "  {}{}",
+                s["instruction"].as_str().unwrap_or(""),
+                if km >= 0.05 { format!("  ({})", crate::app::distance(km)) } else { String::new() }
+            );
+        }
+    }
+}
+
+/// The stops, numbered the way `--rm` and `select` count them.
+fn print_trip(a: &Value) {
+    let stops = a["trip"].as_array().cloned().unwrap_or_default();
+    if stops.len() < 2 && a["awaiting"].is_null() {
         return;
     }
     println!();
-    for s in &steps {
-        let km = s["km"].as_f64().unwrap_or(0.0);
+    for (i, p) in stops.iter().enumerate() {
+        let choosing = p["kind"] == json!("choosing");
         println!(
-            "  {}{}",
-            s["instruction"].as_str().unwrap_or(""),
-            if km >= 0.05 { format!("  ({})", crate::app::distance(km)) } else { String::new() }
+            "{:>3}. {}{}",
+            i + 1,
+            p["name"].as_str().unwrap_or(""),
+            if choosing { "   ← choosing" } else { "" }
         );
     }
 }
@@ -307,13 +375,24 @@ fn print_status(a: &Value) {
     if let Some(p) = a["selected"].as_object() {
         println!("open: {}", p.get("name").and_then(Value::as_str).unwrap_or(""));
     }
+    let stops = a["trip"].as_array().cloned().unwrap_or_default();
+    if !stops.is_empty() {
+        let names: Vec<&str> = stops.iter().filter_map(|p| p["name"].as_str()).collect();
+        println!("trip: {}", names.join(" → "));
+    }
+    if let Some(w) = a["awaiting"].as_object() {
+        println!(
+            "choosing stop {} (\"{}\") — `maps select <N>`",
+            w.get("n").and_then(Value::as_u64).unwrap_or(0),
+            w.get("query").and_then(Value::as_str).unwrap_or(""),
+        );
+    }
     if let Some(r) = a["route"].as_object() {
         println!(
-            "route: {} to {} — {} {}",
-            r.get("from").and_then(Value::as_str).unwrap_or(""),
-            r.get("to").and_then(Value::as_str).unwrap_or(""),
+            "route: {} — {} {}",
             crate::app::distance(r.get("km").and_then(Value::as_f64).unwrap_or(0.0)),
             crate::app::duration(r.get("secs").and_then(Value::as_f64).unwrap_or(0.0)),
+            a["mode"].as_str().unwrap_or(""),
         );
     }
     if let Some(r) = a["reach"].as_object() {

@@ -13,9 +13,11 @@
 // with `false` in a production build, so the fixture is dropped from the shipped bundle.
 //
 // EVERY NUMBER BELOW IS REAL — the places came from a live Photon query around the Eiffel
-// Tower and the route from a live Valhalla answer (4.193 km, 829.79 s, its own six-digit
-// polyline decoded). A fixture made of "Place 1 / Place 2" flatters a layout that real
-// names like "Café des 2 Moulins" would break.
+// Tower, and the route from a live Valhalla answer for a THREE-STOP walk (Eiffel Tower →
+// Musée d'Orsay → Louvre, 3.94 km, two legs, its own six-digit polyline decoded). A
+// fixture made of "Place 1 / Place 2" flatters a layout that real names like "Café des 2
+// Moulins" would break — and a two-stop fixture would flatter a trip editor that has to
+// show legs.
 
 import type { State } from "./bridge";
 
@@ -77,140 +79,293 @@ const PLACES = [
 ] as const;
 
 const ROUTE = {
-  "mode": "drive",
-  "km": 4.193,
-  "secs": 829.79,
-  "from": "Eiffel Tower",
-  "to": "Louvre Museum",
+  "mode": "walk",
+  "km": 3.941,
+  "secs": 3117.26,
+  "stops": [
+    "Eiffel Tower",
+    "Musee d'Orsay",
+    "Louvre Museum"
+  ],
   "shape": [
     [
-      2.29348,
-      48.859039
+      2.294459,
+      48.858369
     ],
     [
-      2.296244,
-      48.860952
+      2.294453,
+      48.85884
     ],
     [
-      2.299785,
-      48.862122
+      2.29395,
+      48.858818
     ],
     [
-      2.301381,
-      48.862261
+      2.294711,
+      48.858565
     ],
     [
-      2.302446,
-      48.86239
+      2.294912,
+      48.859218
     ],
     [
-      2.305957,
-      48.862463
+      2.294947,
+      48.859507
     ],
     [
-      2.310419,
-      48.862575
+      2.295947,
+      48.85949
     ],
     [
-      2.311856,
-      48.862816
+      2.296761,
+      48.859942
     ],
     [
-      2.314556,
-      48.862866
+      2.298618,
+      48.860462
     ],
     [
-      2.315407,
-      48.862873
+      2.300926,
+      48.860871
     ],
     [
-      2.318641,
-      48.862631
+      2.301366,
+      48.860925
     ],
     [
-      2.319123,
-      48.862741
+      2.302269,
+      48.861022
     ],
     [
-      2.320049,
-      48.863994
+      2.302587,
+      48.861078
     ],
     [
-      2.320638,
-      48.863904
+      2.303208,
+      48.861078
     ],
     [
-      2.32759,
-      48.861666
+      2.303548,
+      48.861096
     ],
     [
-      2.330696,
-      48.860683
+      2.305568,
+      48.861081
     ],
     [
-      2.332942,
-      48.860201
+      2.306993,
+      48.86105
     ],
     [
-      2.333695,
-      48.860033
+      2.308223,
+      48.861096
     ],
     [
-      2.337975,
-      48.859246
+      2.309521,
+      48.861125
     ],
     [
-      2.33996,
-      48.859204
+      2.311395,
+      48.861121
     ],
     [
-      2.340755,
-      48.860773
+      2.312949,
+      48.861141
     ],
     [
-      2.340318,
-      48.861144
+      2.313081,
+      48.86121
+    ],
+    [
+      2.314098,
+      48.861083
+    ],
+    [
+      2.315034,
+      48.86097
+    ],
+    [
+      2.316821,
+      48.860867
+    ],
+    [
+      2.317999,
+      48.860799
+    ],
+    [
+      2.319992,
+      48.86065
+    ],
+    [
+      2.320617,
+      48.8612
+    ],
+    [
+      2.323602,
+      48.860331
+    ],
+    [
+      2.324698,
+      48.860162
+    ],
+    [
+      2.325085,
+      48.860392
+    ],
+    [
+      2.325407,
+      48.860562
+    ],
+    [
+      2.325576,
+      48.860704
+    ],
+    [
+      2.32571,
+      48.86067
+    ],
+    [
+      2.325937,
+      48.860534
+    ],
+    [
+      2.326786,
+      48.860255
+    ],
+    [
+      2.329173,
+      48.859507
+    ],
+    [
+      2.329426,
+      48.859609
+    ],
+    [
+      2.330664,
+      48.860692
+    ],
+    [
+      2.331594,
+      48.860488
+    ],
+    [
+      2.333057,
+      48.86024
+    ],
+    [
+      2.333336,
+      48.860526
+    ],
+    [
+      2.333848,
+      48.861018
+    ],
+    [
+      2.334695,
+      48.860776
+    ],
+    [
+      2.337281,
+      48.860301
     ]
   ],
-  "steps": [
+  "legs": [
     {
-      "instruction": "Drive northeast on Quai Jacques Chirac.",
-      "km": 2.014,
-      "secs": 386.1,
-      "at": 0
+      "from": "Eiffel Tower",
+      "to": "Musee d'Orsay",
+      "km": 2.913,
+      "secs": 2268.22,
+      "steps": [
+        {
+          "instruction": "Walk north.",
+          "km": 0.058,
+          "secs": 50.7,
+          "at": 0
+        },
+        {
+          "instruction": "Turn left onto the walkway.",
+          "km": 0.029,
+          "secs": 36.1,
+          "at": 6
+        },
+        {
+          "instruction": "Turn right onto the walkway.",
+          "km": 0.026,
+          "secs": 22.3,
+          "at": 10
+        },
+        {
+          "instruction": "Turn left onto the walkway.",
+          "km": 0.085,
+          "secs": 116.6,
+          "at": 13
+        },
+        {
+          "instruction": "Turn left onto the walkway.",
+          "km": 0.124,
+          "secs": 105.9,
+          "at": 17
+        },
+        {
+          "instruction": "Turn right onto the walkway.",
+          "km": 0.012,
+          "secs": 8.5,
+          "at": 27
+        }
+      ]
     },
     {
-      "instruction": "Turn left onto Pont de la Concorde.",
-      "km": 0.19,
-      "secs": 41.6,
-      "at": 84
-    },
-    {
-      "instruction": "Turn right onto Quai des Tuileries.",
-      "km": 1.562,
-      "secs": 302.4,
-      "at": 101
-    },
-    {
-      "instruction": "Turn left onto Rue de l'Amiral de Coligny.",
-      "km": 0.231,
-      "secs": 48.8,
-      "at": 150
-    },
-    {
-      "instruction": "Turn left onto Rue de Rivoli.",
-      "km": 0.195,
-      "secs": 50.9,
-      "at": 165
-    },
-    {
-      "instruction": "Your destination is on the left.",
-      "km": 0,
-      "secs": 0,
-      "at": 175
+      "from": "Musee d'Orsay",
+      "to": "Louvre Museum",
+      "km": 1.027,
+      "secs": 849.04,
+      "steps": [
+        {
+          "instruction": "Walk southeast on the walkway.",
+          "km": 0.084,
+          "secs": 65.3,
+          "at": 35
+        },
+        {
+          "instruction": "Take the stairs.",
+          "km": 0.008,
+          "secs": 5.6,
+          "at": 37
+        },
+        {
+          "instruction": "Continue on the walkway.",
+          "km": 0.106,
+          "secs": 88.4,
+          "at": 38
+        },
+        {
+          "instruction": "Turn left onto Rue du Bac.",
+          "km": 0.178,
+          "secs": 142,
+          "at": 44
+        },
+        {
+          "instruction": "Turn right onto Quai François Mitterrand.",
+          "km": 0.182,
+          "secs": 166.2,
+          "at": 53
+        },
+        {
+          "instruction": "Turn left onto the walkway.",
+          "km": 0.117,
+          "secs": 83.6,
+          "at": 64
+        }
+      ]
     }
   ]
 } as const;
+
+const STOPS = [
+  { id: "W1", name: "Eiffel Tower", kind: "tower", address: "Avenue Anatole France, Paris", lat: 48.8584, lon: 2.2945, country: "France" },
+  { id: "W2", name: "Musée d'Orsay", kind: "museum", address: "Rue de la Légion d'Honneur, Paris", lat: 48.86, lon: 2.3266, country: "France" },
+  { id: "W3", name: "Louvre Museum", kind: "museum", address: "Rue de Rivoli, Paris", lat: 48.8606, lon: 2.3376, country: "France" },
+] as const;
 
 const SNAPSHOT: State = {
   ok: true,
@@ -219,6 +374,9 @@ const SNAPSHOT: State = {
   query: "cafes",
   results: PLACES as unknown as State["results"],
   selected: PLACES[1] as unknown as State["selected"],
+  trip: STOPS as unknown as State["trip"],
+  awaiting: null,
+  mode: "walk",
   route: ROUTE as unknown as State["route"],
   reach: null,
   pins: [

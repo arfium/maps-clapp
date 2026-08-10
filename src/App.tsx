@@ -14,7 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { agentTint, cmd, prefetchAssets, useAsset, useSnapshot } from "@clappkit";
 import { MapSurface } from "./map";
 import {
-  CATEGORIES, EMPTY, TILE_CLASSES, coords, distance, duration,
+  CATEGORIES, CHOOSING, EMPTY, TILE_CLASSES, coords, distance, duration,
   type Agent, type Mode, type Place, type Req, type State,
 } from "./bridge";
 
@@ -30,7 +30,6 @@ export default function App() {
   const { state, apply } = useSnapshot<State, Req>(EMPTY, { initial: { cmd: "state" } });
   const [note, setNote] = useState<Note>(null);
   const [text, setText] = useState("");
-  const [mode, setMode] = useState<Mode>("drive");
   const [routeTo, setRouteTo] = useState("");
   const [panel, setPanel] = useState<"results" | "route" | "pins">("results");
   // The map is the point of a map app, so the panel gets out of the way on request. The
@@ -105,9 +104,12 @@ export default function App() {
   }, [state.query]);
 
   useEffect(() => {
-    if (state.route) setPanel("route");
+    // A question outranks an answer: when a stop is waiting to be chosen, the list to
+    // choose from is the only thing worth looking at.
+    if (state.awaiting) setPanel("results");
+    else if (state.route) setPanel("route");
     else if (state.results.length) setPanel("results");
-  }, [state.route, state.results.length]);
+  }, [state.awaiting, state.route, state.results.length]);
 
   // Tapping a category answers itself first.
   //
@@ -217,7 +219,7 @@ export default function App() {
           <Tab id="results" now={panel} set={setPanel} n={state.results.length}>
             Results
           </Tab>
-          <Tab id="route" now={panel} set={setPanel} n={state.route ? state.route.steps.length : 0}>
+          <Tab id="route" now={panel} set={setPanel} n={state.trip.length}>
             Route
           </Tab>
           <Tab id="pins" now={panel} set={setPanel} n={state.pins.length}>
@@ -227,21 +229,21 @@ export default function App() {
 
         <div className="scroll">
           {panel === "results" && (
-            <Results
-              state={state}
-              somewhere={somewhere}
-              onPick={(n) => void say({ cmd: "select", n })}
-            />
+            <>
+              {state.awaiting && (
+                <p className="asking">
+                  Which <strong>{state.awaiting.query}</strong> is stop {state.awaiting.n}?
+                </p>
+              )}
+              <Results
+                state={state}
+                somewhere={somewhere}
+                onPick={(n) => void say({ cmd: "select", n })}
+              />
+            </>
           )}
           {panel === "route" && (
-            <RoutePanel
-              state={state}
-              to={routeTo}
-              setTo={setRouteTo}
-              mode={mode}
-              setMode={setMode}
-              say={say}
-            />
+            <RoutePanel state={state} to={routeTo} setTo={setRouteTo} say={say} />
           )}
           {panel === "pins" && <Pins state={state} say={say} />}
         </div>
@@ -323,42 +325,69 @@ function Results(props: { state: State; somewhere: boolean; onPick: (n: number) 
   );
 }
 
+/** The trip: the stops, in order, and what the route made of them costs.
+ *
+ * Every control here sends the same `route` the agent types — `--add`, `--rm`, `--mode` —
+ * so a trip built by clicking and a trip built by typing are the same trip. */
 function RoutePanel(props: {
   state: State;
   to: string;
   setTo: (v: string) => void;
-  mode: Mode;
-  setMode: (m: Mode) => void;
   say: (r: Req) => void;
 }) {
-  const { state, to, setTo, mode, setMode, say } = props;
-  const from = state.selected?.name ?? state.view.name ?? "here";
+  const { state, to, setTo, say } = props;
+  const stops = state.trip;
+
   return (
     <div className="route">
+      <ol className="stops">
+        {stops.map((p, i) => (
+          <li key={`${p.id}-${i}`} className={p.kind === CHOOSING ? "choosing" : ""}>
+            <span className="n">{i + 1}</span>
+            <div>
+              <strong>{p.name}</strong>
+              {p.kind === CHOOSING ? (
+                <em>pick one below</em>
+              ) : (
+                p.address && <span className="addr">{p.address}</span>
+              )}
+            </div>
+            <button className="ghost" title="Remove this stop" onClick={() => say({ cmd: "route", rm: i + 1 })}>
+              ×
+            </button>
+          </li>
+        ))}
+      </ol>
+
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (to.trim()) say({ cmd: "route", to, mode });
+          if (!to.trim()) return;
+          // One field, whatever the trip's state: with no stops yet this starts one from
+          // where you are, and after that it appends. The same `route` either way.
+          say(stops.length ? { cmd: "route", add: to } : { cmd: "route", stops: [to] });
+          setTo("");
         }}
       >
-        <label>
-          From <strong>{from}</strong>
-        </label>
-        <input value={to} placeholder="To…" onChange={(e) => setTo(e.target.value)} />
+        <input
+          value={to}
+          placeholder={stops.length ? "Add a stop…" : "Where to?"}
+          onChange={(e) => setTo(e.target.value)}
+        />
         <div className="modes">
           {(["drive", "bike", "walk"] as Mode[]).map((m) => (
             <button
               key={m}
               type="button"
-              className={mode === m ? "on" : ""}
-              onClick={() => setMode(m)}
+              className={state.mode === m ? "on" : ""}
+              onClick={() => say({ cmd: "route", mode: m })}
             >
               {m}
             </button>
           ))}
         </div>
         <button type="submit" disabled={!to.trim()}>
-          Route
+          {stops.length ? "Add stop" : "Route"}
         </button>
       </form>
 
@@ -370,16 +399,36 @@ function RoutePanel(props: {
             {/* The one thing a routing answer must never let anybody assume. */}
             <em title="No open routing service has traffic data">no live traffic</em>
           </div>
-          <ol className="steps">
-            {state.route.steps.map((s, i) => (
-              <li key={i}>
-                <span>{s.instruction}</span>
-                {s.km >= 0.05 && <b>{distance(s.km)}</b>}
-              </li>
-            ))}
-          </ol>
+          {state.route.legs.map((leg, i) => (
+            <div key={i} className="leg">
+              {state.route!.legs.length > 1 && (
+                <h4>
+                  {i + 1}. {leg.from} → {leg.to}
+                  <b>
+                    {distance(leg.km)} · {duration(leg.secs)}
+                  </b>
+                </h4>
+              )}
+              <ol className="steps">
+                {leg.steps.map((st, j) => (
+                  <li key={j}>
+                    <span>{st.instruction}</span>
+                    {st.km >= 0.05 && <b>{distance(st.km)}</b>}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ))}
         </>
       )}
+
+      {!state.route && !stops.length && (
+        <p className="empty">
+          Add a stop to start a trip. Any number of them, in order — and if a name is
+          ambiguous you get the candidates to choose from rather than a guess.
+        </p>
+      )}
+
       {state.reach && (
         <p className="empty">
           Showing {state.reach.minutes} minutes {state.reach.mode} from {state.reach.from}.

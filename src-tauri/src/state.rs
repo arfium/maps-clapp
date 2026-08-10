@@ -10,7 +10,7 @@
 //! camera. A human dragging the map changes it sixty times a second, and an agent does not
 //! want sixty notifications about it — see [`AppState::look_at`] and [`worth_announcing`].
 
-use crate::geo::{km_between, Place, Reach, Route};
+use crate::geo::{km_between, Mode, Place, Reach, Route};
 use clappkit::{AgentRow, Emit};
 use serde_json::{json, Value};
 
@@ -52,6 +52,22 @@ impl Default for View {
     }
 }
 
+/// A stop the caller has not pinned down yet: which slot in the trip is waiting, and what
+/// was typed to get there.
+///
+/// This is what makes an ambiguous query a *state* rather than a failure. The candidates
+/// sit in `results` where both surfaces already show them, and whichever surface picks —
+/// `maps select 2`, or a click on the row — fills this slot and the trip carries on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Awaiting {
+    pub slot: usize,
+    pub query: String,
+}
+
+/// The `kind` a placeholder stop wears. One spelling, in one place, because three
+/// comparisons against a bare string is how a placeholder ends up in an export.
+pub const CHOOSING: &str = "choosing";
+
 /// A place the human decided to keep.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pin {
@@ -69,6 +85,16 @@ pub struct AppState {
     results: Vec<Place>,
     /// Index into `results`, or a place opened directly (`goto`) with no result list.
     selected: Option<Place>,
+    /// The stops, in order. Two or more make a route; the route is a *function* of this,
+    /// recomputed whenever it changes — which is the whole reason multi-stop works at all.
+    /// A one-shot `route A B` is just a two-stop trip.
+    trip: Vec<Place>,
+    /// Which stop is waiting to be chosen, if any.
+    awaiting: Option<Awaiting>,
+    /// How the trip is travelled. Shared, not a window control: an agent that routes on
+    /// foot and a window still showing "drive" would be two surfaces disagreeing about the
+    /// same journey.
+    mode: Mode,
     route: Option<Route>,
     reach: Option<Reach>,
     pins: Vec<Pin>,
@@ -108,6 +134,129 @@ impl AppState {
 
     pub fn pins(&self) -> &[Pin] {
         &self.pins
+    }
+
+    // ── the trip ─────────────────────────────────────────────────────────────
+
+    pub fn trip(&self) -> &[Place] {
+        &self.trip
+    }
+
+    pub fn awaiting(&self) -> Option<&Awaiting> {
+        self.awaiting.as_ref()
+    }
+
+    /// Replace the whole trip. Any route already drawn is for a journey that no longer
+    /// exists, so it goes with it.
+    pub fn set_trip(&mut self, stops: Vec<Place>) {
+        self.trip = stops;
+        self.route = None;
+        self.awaiting = None;
+    }
+
+    /// Append a stop to the end of the trip.
+    pub fn add_stop(&mut self, p: Place) {
+        self.trip.push(p);
+        self.route = None;
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    pub fn set_mode(&mut self, m: Mode) {
+        if self.mode != m {
+            self.mode = m;
+            // The line on the map was drawn for the old way of travelling.
+            self.route = None;
+        }
+    }
+
+    /// Reserve a slot for a stop nobody has chosen yet, and record what was asked for.
+    ///
+    /// The placeholder is a real entry in the trip, so both surfaces can *see* the gap —
+    /// "2. … Taksim (choosing)" is honest, and a trip that silently dropped a stop is not.
+    /// It also IS the queue: with three ambiguous stops there are three placeholders, and
+    /// [`next_choosing`](Self::next_choosing) simply finds the next one. One question at a
+    /// time, and no separate list to keep in step with the trip.
+    pub fn await_stop(&mut self, query: &str) {
+        self.trip.push(Place {
+            // The raw query, kept where a placeholder can carry it without a new field.
+            id: format!("?{query}"),
+            name: query.to_string(),
+            kind: CHOOSING.into(),
+            ..Place::default()
+        });
+        self.route = None;
+        if self.awaiting.is_none() {
+            self.awaiting = self.next_choosing();
+        }
+    }
+
+    /// The first stop still waiting to be chosen.
+    pub fn next_choosing(&self) -> Option<Awaiting> {
+        self.trip.iter().enumerate().find(|(_, p)| p.kind == CHOOSING).map(|(slot, p)| Awaiting {
+            slot,
+            query: p.id.strip_prefix('?').unwrap_or(&p.name).to_string(),
+        })
+    }
+
+    /// Fill the waiting slot, and move the question on to the next one. Returns false when
+    /// nothing was waiting, so the caller can treat that `select` as an ordinary "open".
+    pub fn resolve_stop(&mut self, p: Place) -> bool {
+        let Some(a) = self.awaiting.take() else { return false };
+        if a.slot < self.trip.len() {
+            self.trip[a.slot] = p;
+        } else {
+            self.trip.push(p);
+        }
+        self.awaiting = self.next_choosing();
+        true
+    }
+
+    /// Drop stop N (1-based, the numbering both surfaces show).
+    pub fn remove_stop(&mut self, n: usize) -> Result<String, String> {
+        if n == 0 || n > self.trip.len() {
+            return Err(match self.trip.len() {
+                0 => "there is no trip yet — `route \"<from>\" \"<to>\"` starts one".to_string(),
+                len => format!("the trip has {len} stop{}; {n} is not one of them", plural(len)),
+            });
+        }
+        let gone = self.trip.remove(n - 1);
+        // Removing the stop somebody was choosing cancels the choice with it.
+        if self.awaiting.as_ref().is_some_and(|a| a.slot + 1 == n) {
+            self.awaiting = None;
+        }
+        self.route = None;
+        Ok(gone.name)
+    }
+
+    pub fn clear_trip(&mut self) {
+        self.trip.clear();
+        self.awaiting = None;
+        self.route = None;
+    }
+
+    /// Is the trip ready to be routed — at least two stops, none of them still a question?
+    pub fn trip_ready(&self) -> bool {
+        self.trip.len() >= 2 && self.awaiting.is_none()
+    }
+
+    /// A `context` signal, and only for a human's edit: the agent already knows about the
+    /// stop it added itself.
+    pub fn trip_changed(&self, actor: Actor) -> Vec<Emit> {
+        if actor == Actor::Agent {
+            return Vec::new();
+        }
+        vec![Emit {
+            id: "trip.changed".into(),
+            target: Vec::new(),
+            payload: json!({
+                "stops": self.trip.iter().map(|p| json!({
+                    "name": p.name, "lat": round6(p.lat), "lon": round6(p.lon),
+                })).collect::<Vec<_>>(),
+            }),
+        }]
     }
 
     /// Where a search should look first: wherever the map already is, once it is close
@@ -311,9 +460,17 @@ impl AppState {
                 self.selected = None;
                 Ok(("cleared the results".into(), Vec::new()))
             }
-            "route" => {
-                self.route = None;
-                Ok(("cleared the route".into(), Vec::new()))
+            "route" | "trip" => {
+                let had = self.trip.len();
+                self.clear_trip();
+                Ok((
+                    if had > 0 {
+                        format!("cleared the trip — {had} stop{} gone", plural(had))
+                    } else {
+                        "cleared the route".into()
+                    },
+                    self.trip_changed(actor),
+                ))
             }
             "reach" | "isochrone" => {
                 self.reach = None;
@@ -328,12 +485,12 @@ impl AppState {
                 self.results.clear();
                 self.query.clear();
                 self.selected = None;
-                self.route = None;
                 self.reach = None;
+                self.clear_trip();
                 Ok(("cleared the map — the pins are still there".into(), Vec::new()))
             }
             other => Err(format!(
-                "clear what? results, route, reach, pins, or all — not \"{other}\""
+                "clear what? results, trip, reach, pins, or all — not \"{other}\""
             )),
         }
     }
@@ -362,6 +519,9 @@ impl AppState {
             "pins": self.pins.iter().map(|p| json!({
                 "name": p.name, "lat": p.lat, "lon": p.lon, "note": p.note,
             })).collect::<Vec<_>>(),
+            // The stops, but not the computed route: the plan is the human's, the line is
+            // a derived answer that costs one request to get back and may have changed.
+            "trip": self.trip.iter().filter(|p| p.kind != CHOOSING).collect::<Vec<_>>(),
         })
     }
 
@@ -380,6 +540,9 @@ impl AppState {
                     };
                 }
             }
+        }
+        if let Some(stops) = v.get("trip").and_then(Value::as_array) {
+            self.trip = stops.iter().filter_map(saved_place).collect();
         }
         if let Some(pins) = v.get("pins").and_then(Value::as_array) {
             self.pins = pins
@@ -415,13 +578,21 @@ impl AppState {
                 json!({ "kind": "result", "name": p.name, "type": p.kind, "address": p.address }),
             ));
         }
+        for (i, p) in self.trip.iter().enumerate().filter(|(_, p)| p.kind != CHOOSING) {
+            features.push(point(
+                p.lon,
+                p.lat,
+                json!({ "kind": "stop", "n": i + 1, "name": p.name }),
+            ));
+        }
         if let Some(r) = &self.route {
             features.push(json!({
                 "type": "Feature",
                 "geometry": { "type": "LineString", "coordinates": r.shape },
                 "properties": {
                     "kind": "route", "mode": r.mode, "km": round2(r.km),
-                    "minutes": round1(r.secs / 60.0), "from": r.from, "to": r.to,
+                    "minutes": round1(r.secs / 60.0), "stops": r.stops,
+                    "from": r.from(), "to": r.to(),
                 },
             }));
         }
@@ -452,12 +623,17 @@ impl AppState {
                 xml(&p.name)
             ));
         }
-        if let Some(r) = &self.route {
+        for (i, p) in self.trip.iter().enumerate().filter(|(_, p)| p.kind != CHOOSING) {
             s.push_str(&format!(
-                "  <trk><name>{} to {}</name><trkseg>\n",
-                xml(&r.from),
-                xml(&r.to)
+                "  <wpt lat=\"{:.6}\" lon=\"{:.6}\"><name>{}. {}</name></wpt>\n",
+                p.lat,
+                p.lon,
+                i + 1,
+                xml(&p.name)
             ));
+        }
+        if let Some(r) = &self.route {
+            s.push_str(&format!("  <trk><name>{}</name><trkseg>\n", xml(&r.stops.join(" → "))));
             for pt in &r.shape {
                 s.push_str(&format!("    <trkpt lat=\"{:.6}\" lon=\"{:.6}\"/>\n", pt[1], pt[0]));
             }
@@ -479,6 +655,11 @@ impl AppState {
             "query": self.query,
             "results": self.results,
             "selected": self.selected,
+            "mode": self.mode,
+            "trip": self.trip,
+            "awaiting": self.awaiting.as_ref().map(|a| json!({
+                "slot": a.slot, "n": a.slot + 1, "query": a.query,
+            })),
             "route": self.route,
             "reach": self.reach,
             "pins": self.pins.iter().map(|p| json!({
@@ -491,6 +672,22 @@ impl AppState {
             })).collect::<Vec<_>>(),
         }))
     }
+}
+
+/// One stop out of a saved session. Same rule as everything else in `restore`: a malformed
+/// entry is skipped, never adopted.
+fn saved_place(v: &Value) -> Option<Place> {
+    let lat = v.get("lat")?.as_f64()?;
+    let lon = v.get("lon")?.as_f64()?;
+    if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+        return None;
+    }
+    let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let name = s("name");
+    if name.is_empty() {
+        return None;
+    }
+    Some(Place { id: s("id"), name, kind: s("kind"), address: s("address"), lat, lon, ..Place::default() })
 }
 
 /// Is this camera move a different *place*, or the same one seen slightly differently?
@@ -573,6 +770,28 @@ mod tests {
 
     fn place(name: &str, lat: f64, lon: f64) -> Place {
         Place { id: name.into(), name: name.into(), lat, lon, ..Place::default() }
+    }
+
+    /// A route shaped like the real ones, with one leg per pair of stops.
+    fn route(mode: Mode, stops: &[&str]) -> Route {
+        use crate::geo::Leg;
+        Route {
+            mode,
+            km: 4.2,
+            secs: 830.0,
+            stops: stops.iter().map(|s| s.to_string()).collect(),
+            shape: vec![[2.0, 48.0], [2.1, 48.1]],
+            legs: stops
+                .windows(2)
+                .map(|w| Leg {
+                    from: w[0].into(),
+                    to: w[1].into(),
+                    km: 2.1,
+                    secs: 415.0,
+                    steps: vec![],
+                })
+                .collect(),
+        }
     }
 
     fn city(name: &str, lat: f64, lon: f64, span: f64) -> Place {
@@ -732,15 +951,7 @@ mod tests {
             ring: vec![[0.0, 0.0]; 4],
         });
         assert!(s.snapshot()["reach"].is_object());
-        s.set_route(Route {
-            mode: Mode::Drive,
-            km: 4.2,
-            secs: 830.0,
-            from: "a".into(),
-            to: "b".into(),
-            shape: vec![[2.0, 48.0], [2.1, 48.1]],
-            steps: vec![],
-        });
+        s.set_route(route(Mode::Drive, &["a", "b"]));
         assert!(s.snapshot()["reach"].is_null(), "the older answer must go");
     }
 
@@ -751,15 +962,7 @@ mod tests {
         let mut s = AppState::new();
         s.pin(Pin { name: "home".into(), lat: 48.0, lon: 2.0, note: "n".into() }, Actor::Human);
         s.set_results("cafe".into(), vec![place("Cafe", 48.1, 2.1)]);
-        s.set_route(Route {
-            mode: Mode::Bike,
-            km: 1.0,
-            secs: 300.0,
-            from: "a".into(),
-            to: "b".into(),
-            shape: vec![[2.0, 48.0], [2.1, 48.1]],
-            steps: vec![],
-        });
+        s.set_route(route(Mode::Bike, &["a", "b"]));
         let g = s.geojson();
         let f = g["features"].as_array().unwrap();
         assert_eq!(f.len(), 3);
@@ -775,6 +978,134 @@ mod tests {
         let x = s.gpx();
         assert!(x.contains("Bed &amp; Breakfast &lt;2&gt;"), "{x}");
         assert!(x.starts_with("<?xml"));
+    }
+
+    // ── the trip ─────────────────────────────────────────────────────────────
+
+    /// The whole point of the rewrite: a stop can be added without losing the journey.
+    #[test]
+    fn adding_a_stop_keeps_the_trip_instead_of_replacing_it() {
+        let mut s = AppState::new();
+        s.set_trip(vec![place("Galata", 41.0256, 28.9742), place("Taksim", 41.0369, 28.9850)]);
+        s.set_route(route(Mode::Walk, &["Galata", "Taksim"]));
+        s.add_stop(place("Karaköy", 41.0255, 28.9770));
+
+        let names: Vec<&str> = s.trip().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Galata", "Taksim", "Karaköy"]);
+        assert!(s.snapshot()["route"].is_null(), "the old line is for a journey that changed");
+        assert!(s.trip_ready(), "three real stops are routable");
+    }
+
+    #[test]
+    fn a_stop_can_be_dropped_by_the_number_both_surfaces_show() {
+        let mut s = AppState::new();
+        s.set_trip(vec![place("A", 1.0, 1.0), place("B", 2.0, 2.0), place("C", 3.0, 3.0)]);
+        assert_eq!(s.remove_stop(2).unwrap(), "B");
+        let names: Vec<&str> = s.trip().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["A", "C"]);
+        assert!(s.remove_stop(9).unwrap_err().contains("2 stops"));
+        assert!(s.remove_stop(0).is_err(), "the numbering is 1-based");
+    }
+
+    /// An ambiguous name is a question, not a guess and not a failure.
+    #[test]
+    fn an_unchosen_stop_is_visible_and_blocks_the_route() {
+        let mut s = AppState::new();
+        s.set_trip(vec![place("Galata", 41.0256, 28.9742)]);
+        s.await_stop("Taksim");
+
+        assert_eq!(s.trip().len(), 2, "the gap is a real entry, not a silent omission");
+        assert_eq!(s.trip()[1].kind, CHOOSING);
+        assert!(!s.trip_ready(), "a trip with an open question is not routable");
+        let a = s.awaiting().expect("something is being chosen");
+        assert_eq!((a.slot, a.query.as_str()), (1, "Taksim"));
+    }
+
+    #[test]
+    fn choosing_fills_the_stop_and_moves_on_to_the_next_question() {
+        let mut s = AppState::new();
+        s.set_trip(vec![place("Galata", 41.0256, 28.9742)]);
+        s.await_stop("Taksim");
+        s.await_stop("Kadıköy");
+        assert_eq!(s.awaiting().unwrap().slot, 1, "one question at a time, in order");
+
+        assert!(s.resolve_stop(place("Taksim Meydanı", 41.0369, 28.9850)));
+        assert_eq!(s.trip()[1].name, "Taksim Meydanı");
+        assert_eq!(
+            s.awaiting().map(|a| a.query.clone()),
+            Some("Kadıköy".to_string()),
+            "the next placeholder becomes the next question"
+        );
+        assert!(!s.trip_ready());
+
+        assert!(s.resolve_stop(place("Kadıköy İskele", 40.9906, 29.0217)));
+        assert!(s.awaiting().is_none());
+        assert!(s.trip_ready(), "no questions left, so route it");
+    }
+
+    #[test]
+    fn selecting_with_nothing_pending_is_just_opening_a_place() {
+        let mut s = AppState::new();
+        assert!(!s.resolve_stop(place("Somewhere", 1.0, 1.0)), "no question was asked");
+        assert!(s.trip().is_empty(), "an ordinary selection must not join the trip");
+    }
+
+    #[test]
+    fn dropping_the_stop_being_chosen_cancels_the_question() {
+        let mut s = AppState::new();
+        s.set_trip(vec![place("A", 1.0, 1.0)]);
+        s.await_stop("Taksim");
+        s.remove_stop(2).unwrap();
+        assert!(s.awaiting().is_none());
+    }
+
+    #[test]
+    fn changing_how_you_travel_drops_the_line_drawn_for_the_old_way() {
+        let mut s = AppState::new();
+        s.set_trip(vec![place("A", 1.0, 1.0), place("B", 2.0, 2.0)]);
+        s.set_route(route(Mode::Drive, &["A", "B"]));
+        s.set_mode(Mode::Drive);
+        assert!(s.snapshot()["route"].is_object(), "the same mode changes nothing");
+        s.set_mode(Mode::Walk);
+        assert!(s.snapshot()["route"].is_null());
+    }
+
+    /// Only a human's edit signals — otherwise an agent adding a stop wakes itself.
+    #[test]
+    fn only_a_human_trip_edit_signals() {
+        let mut s = AppState::new();
+        s.set_trip(vec![place("A", 1.0, 1.0)]);
+        assert_eq!(s.trip_changed(Actor::Human)[0].id, "trip.changed");
+        assert!(s.trip_changed(Actor::Agent).is_empty());
+    }
+
+    #[test]
+    fn an_unchosen_stop_never_reaches_an_export_or_a_saved_session() {
+        let mut s = AppState::new();
+        s.set_trip(vec![place("A", 1.0, 1.0)]);
+        s.await_stop("Taksim");
+        let g = s.geojson();
+        let kinds: Vec<&str> = g["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|f| f["properties"]["kind"].as_str())
+            .collect();
+        assert_eq!(kinds, ["stop"], "only the stop that is actually a place");
+        assert_eq!(s.saved()["trip"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_trip_survives_a_restart_but_its_route_does_not() {
+        let mut a = AppState::new();
+        a.set_trip(vec![place("Galata", 41.0256, 28.9742), place("Taksim", 41.0369, 28.985)]);
+        a.set_route(route(Mode::Walk, &["Galata", "Taksim"]));
+
+        let mut b = AppState::new();
+        b.restore(&a.saved());
+        assert_eq!(b.trip().len(), 2, "the plan is the human's");
+        assert!(b.snapshot()["route"].is_null(), "the line is a derived answer");
+        assert!(b.trip_ready());
     }
 
     // ── what survives a restart ──────────────────────────────────────────────

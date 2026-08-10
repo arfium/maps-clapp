@@ -14,6 +14,7 @@ Then, from the agent's side:
 maps goto "Shibuya Crossing"
 maps nearby "cafes"
 maps route "Tokyo Station" --mode walk
+maps route "Galata" "Karaköy" "Taksim" --mode walk   # a trip, not two throwaway routes
 ```
 
 …and the human's window flies to Shibuya, drops the cafes on the map nearest-first, and

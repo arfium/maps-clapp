@@ -32,16 +32,29 @@ export type Step = {
   at: number;
 };
 
+/** One hop of a trip. A two-stop route has exactly one, so nothing downstream has to care
+ *  how many stops there were. */
+export type Leg = {
+  from: string;
+  to: string;
+  km: number;
+  secs: number;
+  steps: Step[];
+};
+
 export type Route = {
   mode: Mode;
   km: number;
   secs: number;
-  from: string;
-  to: string;
+  /** Every stop's name, in order. */
+  stops: string[];
   /** `[lon, lat]` — GeoJSON order, ready for a LineString with no transposing. */
   shape: [number, number][];
-  steps: Step[];
+  legs: Leg[];
 };
+
+/** Which stop the trip is waiting on, when a name was ambiguous. */
+export type Awaiting = { slot: number; n: number; query: string };
 
 export type Reach = {
   minutes: number;
@@ -69,6 +82,13 @@ export type State = {
   query: string;
   results: Place[];
   selected: Place | null;
+  /** The stops, in order. The route is computed from these; a stop still being chosen
+   *  appears here too, with `kind === "choosing"`, so the gap is visible rather than
+   *  silently missing. */
+  trip: Place[];
+  awaiting: Awaiting | null;
+  /** How the trip is travelled — shared, not a window control. */
+  mode: Mode;
   route: Route | null;
   reach: Reach | null;
   pins: Pin[];
@@ -84,6 +104,9 @@ export const EMPTY: State = {
   query: "",
   results: [],
   selected: null,
+  trip: [],
+  awaiting: null,
+  mode: "drive",
   route: null,
   reach: null,
   pins: [],
@@ -101,7 +124,7 @@ export type Req =
   | { cmd: "nearby"; q: string }
   | { cmd: "seed"; q: string; places: { id: string; name: string; kind: string; lat: number; lon: number }[] }
   | { cmd: "select"; n: number }
-  | { cmd: "route"; to: string; from?: string; mode?: Mode }
+  | { cmd: "route"; stops?: string[]; add?: string; rm?: number; mode?: Mode }
   | { cmd: "isochrone"; minutes: number; from?: string; mode?: Mode }
   | { cmd: "pin"; name?: string; at?: string; note?: string }
   | { cmd: "unpin"; n: number }
@@ -125,6 +148,9 @@ export function duration(secs: number): string {
   const m = mins % 60;
   return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
+
+/** The `kind` a stop wears while nobody has chosen which place it means. */
+export const CHOOSING = "choosing";
 
 /** 41.008234 → "41.00823". Five decimals is about a metre; more is noise on screen. */
 export function coords(lat: number, lon: number): string {

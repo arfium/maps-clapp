@@ -38,11 +38,11 @@
       },
       {
         "name": "select",
-        "about": "open one result by number: its address, coordinates and what it is"
+        "about": "open result N — or answer which place a trip's stop meant"
       },
       {
         "name": "route",
-        "about": "route between two places by car, bike or on foot, with turn-by-turn steps"
+        "about": "plan a trip through any number of stops, by car, bike or on foot"
       },
       {
         "name": "isochrone",
@@ -58,7 +58,7 @@
       },
       {
         "name": "clear",
-        "about": "clear results, the route, the isochrone or the pins"
+        "about": "clear results, the trip, the reachable area or the pins"
       },
       {
         "name": "export",
@@ -88,6 +88,10 @@
       },
       {
         "id": "pins.changed",
+        "type": "context"
+      },
+      {
+        "id": "trip.changed",
         "type": "context"
       }
     ]

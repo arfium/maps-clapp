@@ -65,7 +65,7 @@ function animates(): boolean {
  * map. A new route, a new reachable area, a different place opened, or a view the core
  * itself set: those are. */
 function frameKey(s: State): string {
-  if (s.route) return `route:${s.route.from}>${s.route.to}:${s.route.mode}:${s.route.shape.length}`;
+  if (s.route) return `route:${s.route.stops.join(">")}:${s.route.mode}:${s.route.shape.length}`;
   if (s.reach) return `reach:${s.reach.from}:${s.reach.minutes}:${s.reach.mode}`;
   if (s.selected) return `place:${s.selected.id}`;
   return `view:${s.view.lat.toFixed(4)},${s.view.lon.toFixed(4)},${s.view.zoom.toFixed(1)}`;
@@ -208,7 +208,7 @@ export class MapSurface {
   /** Every source and layer this app draws, created once on style load. */
   private install() {
     const m = this.map;
-    for (const id of ["reach", "route", "results", "pins", "selected"]) {
+    for (const id of ["reach", "route", "results", "pins", "selected", "stops"]) {
       m.addSource(id, { type: "geojson", data: EMPTY_FC as never });
     }
 
@@ -300,6 +300,31 @@ export class MapSurface {
         "text-halo-width": 1.6,
       },
     });
+    // The trip's stops, numbered. Above the route line so the order is readable, and a
+    // different shape from a result or a pin because it means something else.
+    m.addLayer({
+      id: "stops",
+      type: "circle",
+      source: "stops",
+      paint: {
+        "circle-radius": 11,
+        "circle-color": "#1268D4",
+        "circle-stroke-width": 3,
+        "circle-stroke-color": "#FFFFFF",
+      },
+    });
+    m.addLayer({
+      id: "stops-n",
+      type: "symbol",
+      source: "stops",
+      layout: {
+        "text-field": ["get", "n"],
+        "text-font": ["Noto Sans Medium"],
+        "text-size": 12,
+        "text-allow-overlap": true,
+      },
+      paint: { "text-color": "#FFFFFF" },
+    });
     m.addLayer({
       id: "pins",
       type: "circle",
@@ -371,6 +396,18 @@ export class MapSurface {
           }
         : EMPTY_FC,
     );
+    this.set("stops", {
+      type: "FeatureCollection",
+      // A stop nobody has chosen yet has no coordinate to draw.
+      features: s.trip
+        .map((p, i) => ({ p, n: i + 1 }))
+        .filter(({ p }) => p.kind !== "choosing")
+        .map(({ p, n }) => ({
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [p.lon, p.lat] },
+          properties: { n: String(n), name: p.name },
+        })),
+    });
     this.set(
       "route",
       s.route
