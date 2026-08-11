@@ -49,6 +49,16 @@ a click on the row — fills it and finishes the route. Several ambiguous stops 
 naturally, because the placeholders *are* the queue. How you travel became shared state
 too: an agent routing on foot no longer leaves the window showing "drive".
 
+### Walking it
+
+`route --optimize` reorders the middle stops for the shortest journey (ends fixed) —
+probed before parsing, and measured on the demo trip: five Istanbul stops went from 18 km
+walked to 10, 2h49 to 1h56. `next`/`back` walk the legs with a shared cursor: the window
+highlights and frames the active leg, the agent's `maps next` moves the same cursor, and
+a human's press rides their next prompt as the buffered `leg` signal. Turn instructions
+arrive in the OS language (probed: tr-TR answers in Turkish). A selected place grows
+hours/phone/website a beat later, with an "open now" that refuses grammar it cannot read.
+
 ### The window
 
 - **The camera stops fighting you.** Every snapshot used to re-frame, which looked right
@@ -66,6 +76,11 @@ too: an agent routing on foot no longer leaves the window showing "drive".
 - **The session survives a restart**: the view and the pins come back, the search does not.
   Reopening in the mid-Atlantic was not a fresh start, it was amnesia — and it made every
   category button fail, because "what is nearby" has no answer in an ocean.
+- **Dark follows the system**, map and panel both — and fixing it surfaced a layering
+  truth: "before the first symbol layer" buried the route under the whole city in the dark
+  style (its first symbol is `water_name`, before any road). Shapes now anchor above the
+  last geometry layer, below every name — which also lifted routes out from under
+  liberty's bridges.
 - **`atm` used to time out.** "Nearby" reached as far as 20 km, which in a city is tens of
   thousands of features; the radius is capped at 5 km and Overpass gets a budget it can
   actually meet.

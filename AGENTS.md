@@ -14,6 +14,8 @@ maps select 3                     # opens one: address, coordinates, what it is
 maps route "Tokyo Station"        # from what is open, drawn on the line they can see
 maps route "A" "B" "C"            # a trip: any number of stops, in order
 maps route --add "#2"             # extend it with a result already on their screen
+maps route --optimize             # reorder the middle stops for the shortest journey
+maps next                         # advance the shared leg cursor — their window follows
 maps pin "meet here" --note "9am" # kept; pins survive searches and routes
 maps export                       # GeoJSON of everything on the map
 ```
@@ -39,6 +41,8 @@ returns the whole state (`--json` prints it), so you rarely need a second call.
   deliberately not reported; if you get one, they went somewhere.
 - **A pin change** (`pins.changed`) — they kept or dropped a place.
 - **A trip change** (`trip.changed`) — they added, removed or chose a stop.
+- **A leg move** (`leg`) — they pressed Next/Back. It rides their next prompt, so "how far
+  to the ferry?" is about the leg they just advanced to. Guide from it.
 
 There is no fourth one. The app cannot make you take a turn — if the human wants you, they
 say so in Clatch. What arrives here is context, not a summons.
@@ -68,6 +72,18 @@ say so in Clatch. What arrives here is context, not a summons.
   it is not a way to make the search cheaper.
 - **`clear all` keeps the pins.** They are the one thing the human deliberately saved. Use
   `clear pins` when you actually mean it, and prefer to ask first.
+
+## Guiding someone who is walking
+
+The demo scenario, and the loop that serves it: build the trip (`route`, `--add`,
+`--optimize`), then walk it with the shared leg cursor. When a `leg` signal arrives, the
+human moved the cursor themselves — answer about THAT leg. `maps next` moves it for them;
+the window highlights and frames the same leg either way. There is no GPS in this app, on
+purpose: progress is what a person says it is.
+
+A selected place carries detail a beat later (hours, phone, website — `status` shows it
+when it lands). "Open now" appears only when the hours grammar could actually be read;
+otherwise you get the raw hours string, and you should quote it rather than guess.
 
 ## Where the data comes from, and what that costs
 

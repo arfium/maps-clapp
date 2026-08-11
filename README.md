@@ -28,8 +28,26 @@ CLI the agent drives. Both run one shared state, so there is no way for the two 
 disagree — every answer either of them gets is the same full snapshot plus a sentence about
 what just happened.
 
-Thirteen verbs: `goto`, `find`, `nearby`, `select`, `route`, `isochrone`, `pin`, `pins`,
-`clear`, `export`, `status`, `focus`, `close`. `maps --help` is the whole manual.
+Fifteen verbs: `goto`, `find`, `nearby`, `select`, `route`, `next`, `back`, `isochrone`,
+`pin`, `pins`, `clear`, `export`, `status`, `focus`, `close`. `maps --help` is the whole
+manual.
+
+## The two-minute demo
+
+Plan a day with your agent, in one shared window:
+
+```sh
+maps goto "Galata Kulesi"                # the window flies there
+maps route "Galata Kulesi" "Taksim Meydanı" "Sultanahmet Camii" "Cihangir" "Eminönü" --mode walk
+maps route --optimize                    # 18 km zigzag → 10 km; 2h49 → 1h56, same stops
+maps next                                # leg 1 lights up on their map, turns in their language
+```
+
+Then the human walks. Each time they press **Next** in the window, the new leg rides
+their next prompt — "how far to the ferry?" is already about the right leg. When a stop's
+name is ambiguous ("Taksim" is a square AND a metro station), nobody guesses: the
+candidates land in the shared list, the trip shows a visible gap, and `maps select 2` — or
+a click — fills it and finishes the route.
 
 ## No keys, no account, no quota
 
