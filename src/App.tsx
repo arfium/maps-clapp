@@ -104,6 +104,33 @@ export default function App() {
     return () => window.clearTimeout(t);
   }, [note]);
 
+  // The keyboard handler must see the current route without re-registering per snapshot.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  // Keyboard: `/` focuses search, Esc dismisses (suggestions → menu → panel), ←/→ walk
+  // the legs. Small, but a map you drive from the keyboard is a map you actually drive.
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const inField = (e.target as HTMLElement)?.tagName === "INPUT";
+      if (e.key === "/" && !inField) {
+        e.preventDefault();
+        setHidden(false);
+        searchRef.current?.focus();
+      } else if (e.key === "Escape") {
+        if (suggestions.length) setSuggestions([]);
+        else if (menu) setMenu(null);
+        else setHidden((h) => !h);
+      } else if (!inField && stateRef.current.route) {
+        if (e.key === "ArrowRight") void sayRef.current({ cmd: "leg", dir: "next" });
+        if (e.key === "ArrowLeft") void sayRef.current({ cmd: "leg", dir: "back" });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [suggestions.length, menu]);
+
   // The window's own copy of the search box follows the core, so an agent's `find` types
   // itself in here — but not while the human is mid-word.
   const typing = useRef(false);
@@ -206,8 +233,9 @@ export default function App() {
           }}
         >
           <input
+            ref={searchRef}
             value={text}
-            placeholder="Search anywhere…"
+            placeholder="Search anywhere…  ( / )"
             onChange={(e) => {
               typing.current = true;
               setText(e.target.value);

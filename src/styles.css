@@ -766,3 +766,121 @@ em {
 .hidden-panel .note {
   max-width: min(720px, calc(100% - 120px));
 }
+
+/* The dark half. The map re-styles itself (OpenFreeMap `dark`); the panel follows with
+ * the same structure and flipped surfaces. Deliberately a variable override plus the few
+ * spots that hardcoded white — not a second stylesheet to drift. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e8efec;
+    --muted: #93a59f;
+    --line: #2c3934;
+    --panel: rgba(22, 30, 27, 0.92);
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  }
+
+  .search input,
+  .route input,
+  .suggest {
+    background: #101815;
+    color: var(--ink);
+    border-color: var(--line);
+  }
+
+  .suggest li {
+    border-bottom-color: #1c2622;
+  }
+
+  .suggest li:hover,
+  .results li:hover,
+  .ctxmenu button:hover,
+  .collapse:hover {
+    background: #1c2622;
+  }
+
+  .results li,
+  .steps li,
+  .pins li,
+  .stops li {
+    border-bottom-color: #1c2622;
+  }
+
+  .results li.on {
+    background: #14241d;
+  }
+
+  .chips button {
+    background: #17221e;
+    color: #7fc9ac;
+  }
+
+  .chips button:hover:not(:disabled) {
+    background: #1d2c26;
+  }
+
+  .tabs b {
+    background: #17221e;
+    color: #7fc9ac;
+  }
+
+  .modes button {
+    background: #17221e;
+    color: #7fc9ac;
+  }
+
+  .optimize {
+    background: #131c2b;
+    color: #7ba6e8;
+  }
+
+  .optimize:hover {
+    background: #182339;
+  }
+
+  .leg.active {
+    background: #131c2b;
+  }
+
+  .leg h4 {
+    background: #101815;
+  }
+
+  .leg h4:hover {
+    background: #131c2b;
+  }
+
+  .stops li.choosing,
+  .asking {
+    background: #241c0d;
+  }
+
+  .summary em {
+    background: #241c0d;
+    color: #d9a441;
+  }
+
+  .summary strong {
+    color: #7ba6e8;
+  }
+
+  .busy {
+    background: rgba(22, 30, 27, 0.95);
+    color: var(--muted);
+  }
+
+  em {
+    color: #7fc9ac;
+  }
+
+  .detail .hours.open {
+    color: #57c98b;
+  }
+
+  .detail .hours.closed {
+    color: #e2726c;
+  }
+
+  .detail a {
+    color: #7fc9ac;
+  }
+}

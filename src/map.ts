@@ -22,10 +22,16 @@
 import maplibregl, { Map as MLMap, MapGeoJSONFeature } from "maplibre-gl";
 import type { State } from "./bridge";
 
-/// OpenFreeMap's Liberty style: OpenStreetMap data, no API key, no registration, no limit,
-/// and it hosts its own glyphs and sprite. Attribution is required and MapLibre adds it
-/// from the style automatically — do not remove the control.
-const STYLE = "https://tiles.openfreemap.org/styles/liberty";
+/// OpenFreeMap's styles: OpenStreetMap data, no API key, no registration, no limit, and
+/// both host their own glyphs and sprite. Attribution is required and MapLibre adds it
+/// from the style automatically — do not remove the control. Both declare the same
+/// `openmaptiles` source, so the tile-POI seed keeps working in the dark.
+const STYLE_LIGHT = "https://tiles.openfreemap.org/styles/liberty";
+const STYLE_DARK = "https://tiles.openfreemap.org/styles/dark";
+
+function themeStyle(dark: boolean): string {
+  return dark ? STYLE_DARK : STYLE_LIGHT;
+}
 
 /// How long after the last camera movement we call it settled. The core hears about the
 /// view once per settle, not once per frame — 250 ms is under the threshold of feeling
@@ -131,9 +137,11 @@ export class MapSurface {
   private clearance = PANEL_CLEARANCE;
 
   constructor(container: HTMLElement, ev: MapEvents) {
+    const prefersDark =
+      typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches;
     this.map = new maplibregl.Map({
       container,
-      style: STYLE,
+      style: themeStyle(prefersDark),
       center: [0, 20],
       zoom: 1.6,
       attributionControl: { compact: true },
@@ -182,16 +190,33 @@ export class MapSurface {
     // loaded, tiles drawn, `addSource`/`addLayer` both perfectly legal, and `load` never
     // fired — so every layer this app draws was simply never created.
     //
-    // `styledata` fires as soon as the style JSON is in, which is precisely the moment
-    // adding sources and layers becomes legal, and it fires again on any later style
-    // change. Hence the guard: install once, on whichever comes first.
+    // `styledata` fires as soon as the style JSON is in — precisely when adding sources
+    // and layers becomes legal — and again on any later style change, INCLUDING the theme
+    // switch below, which tears out everything we installed. So the guard asks the map,
+    // not a flag: whenever our sources are missing, install them again, and re-apply the
+    // snapshot the world was last shown.
     const boot = () => {
-      if (this.ready) return;
+      if (this.map.getSource("route")) return;
       this.install();
       this.ready = true;
+      if (this.framed) {
+        const again = this.framed;
+        this.frameKey = ""; // same subject, fresh canvas
+        this.lastRev = -1; // the canvas forgot everything; the rev guard must too
+        this.apply(again);
+      }
     };
     if (this.map.isStyleLoaded()) boot();
     else this.map.on("styledata", boot);
+
+    // Follow the OS theme. The one deliberate exception to "the map is created once and
+    // never re-styled": this IS a re-style, the user asked for it system-wide, and the
+    // boot above rebuilds our layers when the new style lands.
+    if (typeof matchMedia === "function") {
+      matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+        this.map.setStyle(themeStyle(e.matches));
+      });
+    }
 
     this.map.on("moveend", () => {
       if (this.driving) {
@@ -230,9 +255,18 @@ export class MapSurface {
       m.addSource(id, { type: "geojson", data: EMPTY_FC as never });
     }
 
-    // Anything that is not a label goes below the basemap's first symbol layer, so place
-    // names stay on top of our shapes instead of under them.
-    const firstSymbol = m.getStyle().layers?.find((l) => l.type === "symbol")?.id;
+    // Our shapes go above every ROAD but below every NAME. "Before the first symbol
+    // layer" — the usual advice — is wrong on both styles this app ships: liberty puts
+    // one-way arrows and BRIDGES after its first symbol (routes vanished under
+    // overpasses), and dark begins with `water_name` at index 8, before any road at all
+    // (the route sank under the whole city — "rota altta kaldı", live). The anchor that
+    // means what we want is the first symbol AFTER the last geometry layer.
+    const layers = m.getStyle().layers ?? [];
+    let lastGeom = -1;
+    layers.forEach((l, i) => {
+      if (l.type !== "symbol") lastGeom = i;
+    });
+    const firstSymbol = layers[lastGeom + 1]?.id;
 
     m.addLayer(
       {

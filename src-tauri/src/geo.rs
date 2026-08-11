@@ -1026,6 +1026,34 @@ impl Router for Valhalla {
     }
 }
 
+/// The language turn instructions come back in: the OS locale, held to the set Valhalla
+/// actually translates, else en-US. Probed live: `tr-TR` answers "yaya geçidi caddesine
+/// doğru sağa dönün" (with the odd untranslated string, which is Valhalla's coverage, not
+/// ours). Resolved once — locales do not change mid-flight.
+fn instruction_language() -> &'static str {
+    use std::sync::OnceLock;
+    static LANG: OnceLock<String> = OnceLock::new();
+    LANG.get_or_init(|| {
+        let raw = sys_locale::get_locale().unwrap_or_default();
+        let primary = raw.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
+        // Valhalla's translation set, primary tag → the canonical tag it documents.
+        const KNOWN: [(&str, &str); 26] = [
+            ("bg", "bg-BG"), ("ca", "ca-ES"), ("cs", "cs-CZ"), ("da", "da-DK"),
+            ("de", "de-DE"), ("el", "el-GR"), ("en", "en-US"), ("es", "es-ES"),
+            ("et", "et-EE"), ("fi", "fi-FI"), ("fr", "fr-FR"), ("hi", "hi-IN"),
+            ("hu", "hu-HU"), ("it", "it-IT"), ("ja", "ja-JP"), ("nb", "nb-NO"),
+            ("nl", "nl-NL"), ("pl", "pl-PL"), ("pt", "pt-PT"), ("ro", "ro-RO"),
+            ("ru", "ru-RU"), ("sk", "sk-SK"), ("sl", "sl-SI"), ("sv", "sv-SE"),
+            ("tr", "tr-TR"), ("uk", "uk-UA"),
+        ];
+        KNOWN
+            .iter()
+            .find(|(p, _)| *p == primary)
+            .map(|(_, tag)| tag.to_string())
+            .unwrap_or_else(|| "en-US".to_string())
+    })
+}
+
 /// One request body for /route and /optimized_route — they take the same thing.
 fn trip_request(stops: &[Place], mode: Mode) -> Value {
     json!({
@@ -1038,7 +1066,7 @@ fn trip_request(stops: &[Place], mode: Mode) -> Value {
             .collect::<Vec<_>>(),
         "costing": mode.costing(),
         "units": "kilometers",
-        "directions_options": { "language": "en-US" },
+        "directions_options": { "language": instruction_language() },
     })
 }
 

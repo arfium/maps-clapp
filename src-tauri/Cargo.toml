@@ -26,6 +26,9 @@ serde_json = "1"
 anyhow = "1"
 # Local weekday+minute for the opening-hours evaluation — the one thing std cannot give.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# The OS locale, for turn instructions in the user's own language. Env vars are not it:
+# a macOS GUI process has no LANG.
+sys-locale = "0.3"
 # Three open services: Photon (search), Nominatim (precise address + reverse), Valhalla
 # (routing, isochrones). rustls, never native-tls, so the build stays portable.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
