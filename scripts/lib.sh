@@ -168,9 +168,19 @@ macos_app_bundle() { # <dist> <cli> <display-name> <id> <version> <src-icon-png>
   # The directory must be named `<something>.iconset` — iconutil rejects any other name.
   _work="${TMPDIR:-/tmp}/clapp-icon-$$"; rm -rf "$_work"; mkdir -p "$_work"
   _pad="$_work/dock.png"
-  if "$ROOT/../clappkit/target/release/dock-icon" "$_icon" "$_pad" 2>/dev/null \
-     || cargo run --quiet --release --manifest-path "$ROOT/../clappkit/Cargo.toml" \
-          --bin dock-icon -- "$_icon" "$_pad" 2>/dev/null; then :; else cp "$_icon" "$_pad"; fi
+  # The inset tool is clappkit's own dock-icon bin. Run it through THE APP's manifest so
+  # the vendor [patch] applies — clappkit alone pins clatch over ssh://, so building it
+  # standalone needs a key this machine (a CI runner, a contributor) may not have. The
+  # sibling-checkout path stays as a dev shortcut. And there is deliberately NO silent
+  # full-bleed fallback any more: it shipped a Dock icon that towered over its neighbours
+  # on exactly the machines nobody was watching.
+  if "$ROOT/clappkit/target/release/dock-icon" "$_icon" "$_pad" 2>/dev/null \
+     || "$ROOT/../clappkit/target/release/dock-icon" "$_icon" "$_pad" 2>/dev/null \
+     || cargo run --quiet --release -p clappkit --bin dock-icon \
+          --manifest-path "$ROOT/src-tauri/Cargo.toml" -- "$_icon" "$_pad" 2>/dev/null; then :; else
+    fail "could not build the inset Dock icon (clappkit dock-icon) — refusing to ship a
+      full-bleed .icns that would tower over every icon beside it"
+  fi
   _set="$_work/$_cli.iconset"; mkdir -p "$_set"
   for _s in 16 32 128 256 512; do
     sips -z "$_s" "$_s" "$_pad" --out "$_set/icon_${_s}x${_s}.png" >/dev/null 2>&1

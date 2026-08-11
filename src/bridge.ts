@@ -66,6 +66,19 @@ export type Reach = {
   ring: [number, number][];
 };
 
+/** What OSM knows about the selected place beyond its dot. Arrives a beat after the
+ *  selection (the lookup is gated), keyed by place id so it can never dress up the wrong
+ *  place. `open` is null when the hours grammar was beyond the honest evaluator. */
+export type Detail = {
+  id: string;
+  hours?: string;
+  open?: boolean | null;
+  phone?: string;
+  website?: string;
+  cuisine?: string;
+  wheelchair?: string;
+};
+
 export type Pin = { name: string; lat: number; lon: number; note: string };
 
 export type View = { lat: number; lon: number; zoom: number; name: string };
@@ -84,6 +97,7 @@ export type State = {
   query: string;
   results: Place[];
   selected: Place | null;
+  detail: Detail | null;
   /** The stops, in order. The route is computed from these; a stop still being chosen
    *  appears here too, with `kind === "choosing"`, so the gap is visible rather than
    *  silently missing. */
@@ -108,6 +122,7 @@ export const EMPTY: State = {
   query: "",
   results: [],
   selected: null,
+  detail: null,
   trip: [],
   awaiting: null,
   mode: "drive",
@@ -131,6 +146,8 @@ export type Req =
   | { cmd: "select"; n: number }
   | { cmd: "route"; stops?: string[]; add?: string; rm?: number; mode?: Mode; optimize?: boolean }
   | { cmd: "leg"; dir?: "next" | "back"; n?: number }
+  | { cmd: "suggest"; q: string }
+  | { cmd: "pick"; place: { id: string; name: string; kind: string; lat: number; lon: number } }
   | { cmd: "isochrone"; minutes: number; from?: string; mode?: Mode }
   | { cmd: "pin"; name?: string; at?: string; note?: string }
   | { cmd: "unpin"; n: number }

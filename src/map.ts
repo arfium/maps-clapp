@@ -108,6 +108,8 @@ export type MapEvents = {
   onMove: (lat: number, lon: number, zoom: number) => void;
   /** The human clicked a result; `n` is 1-based, the number both surfaces show. */
   onPick: (n: number) => void;
+  /** The human right-clicked the map: screen point (for the menu) and world point. */
+  onContext: (x: number, y: number, lat: number, lon: number) => void;
 };
 
 export class MapSurface {
@@ -202,6 +204,11 @@ export class MapSurface {
         const c = this.map.getCenter();
         ev.onMove(c.lat, c.lng, this.map.getZoom());
       }, SETTLE_MS);
+    });
+
+    this.map.on("contextmenu", (e) => {
+      e.preventDefault();
+      ev.onContext(e.point.x, e.point.y, e.lngLat.lat, e.lngLat.lng);
     });
 
     // One click handler for the whole result layer, not one per point.

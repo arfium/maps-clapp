@@ -692,6 +692,34 @@ fn nominatim_place(v: &Value) -> Option<Place> {
     })
 }
 
+/// What OSM knows about one place beyond its dot: the fields that turn "a cafe" into
+/// "open until 22:00, +90 …, no steps at the door".
+///
+/// Fetched lazily on selection (one gated Overpass id-lookup, cached for hours) rather
+/// than carried on every [`Place`] — forty results with hours would be forty queries
+/// nobody asked for.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Detail {
+    /// The [`Place::id`] this belongs to, so a slow answer for the last selection cannot
+    /// dress up the current one.
+    pub id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub hours: String,
+    /// Some(true|false) when [`open_now`] could read the hours; None when it could not —
+    /// shown as the raw string then, never guessed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open: Option<bool>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub phone: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub website: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub cuisine: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub wheelchair: String,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Overpass — what is actually around here
 // ─────────────────────────────────────────────────────────────────────────────
@@ -765,6 +793,42 @@ impl Overpass {
             .and_then(Value::as_array)
             .map(|els| els.iter().filter_map(overpass_place).collect())
             .unwrap_or_default())
+    }
+}
+
+impl Overpass {
+    /// The tags of one feature, by the id search gave us ("N123" / "W123" / "R123").
+    pub async fn lookup(&self, id: &str) -> Result<Option<Value>> {
+        let (kind, num) = match (id.chars().next(), &id[1..]) {
+            (Some('N'), n) => ("node", n),
+            (Some('W'), n) => ("way", n),
+            (Some('R'), n) => ("relation", n),
+            _ => return Ok(None), // a coordinate or a pin — nothing to look up
+        };
+        if !num.chars().all(|c| c.is_ascii_digit()) || num.is_empty() {
+            return Ok(None);
+        }
+        let q = format!("[out:json][timeout:10];{kind}({num});out tags 1;");
+        let http = &self.svc.http;
+        let body = self
+            .svc
+            .get(q.clone(), move || async move {
+                let mut last = anyhow!("no Overpass endpoint configured");
+                for url in OVERPASS {
+                    match ask_overpass(http, url, &q).await {
+                        Ok(v) => return Ok(v),
+                        Err(e) => last = e,
+                    }
+                }
+                Err(last)
+            })
+            .await?;
+        Ok(body
+            .get("elements")
+            .and_then(Value::as_array)
+            .and_then(|a| a.first())
+            .and_then(|e| e.get("tags"))
+            .cloned())
     }
 }
 
@@ -1257,6 +1321,37 @@ impl Geo {
         self.valhalla.optimize(stops, mode).await
     }
 
+    /// What OSM knows about this place beyond its dot. `now` is (weekday 0=Monday,
+    /// minutes since midnight) in the user's local time — passed in so the hours
+    /// evaluation stays pure and testable.
+    pub async fn detail(&self, p: &Place, now: (u8, u16)) -> Result<Option<Detail>> {
+        let Some(tags) = self.overpass.lookup(&p.id).await? else { return Ok(None) };
+        let t = |k: &str| tags.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let hours = t("opening_hours");
+        Ok(Some(Detail {
+            id: p.id.clone(),
+            open: open_now(&hours, now.0, now.1),
+            hours,
+            phone: first_nonempty(&[t("phone"), t("contact:phone")]),
+            website: first_nonempty(&[t("website"), t("contact:website")]),
+            cuisine: t("cuisine").replace([';', '_'], " "),
+            wheelchair: t("wheelchair"),
+        }))
+    }
+
+    /// Typeahead candidates for the window, and NOTHING else: Photon only, because
+    /// Nominatim's usage policy forbids being wired to an autocomplete — the `find`
+    /// fallback path must never run per keystroke. Reads no state, changes no state,
+    /// signals nobody.
+    pub async fn suggest(&self, q: &str, bias: Bias) -> Result<Vec<Place>> {
+        if q.trim().len() < 2 {
+            return Ok(Vec::new());
+        }
+        let mut hits = rank(q, bias, self.photon.search(q, bias, None, 10).await?);
+        hits.truncate(6);
+        Ok(hits)
+    }
+
     pub async fn reach(&self, at: &Place, minutes: u32, mode: Mode) -> Result<Reach> {
         self.valhalla.reach(at, minutes, mode).await
     }
@@ -1457,6 +1552,113 @@ pub fn km_between(a: [f64; 2], b: [f64; 2]) -> f64 {
     let dlon = (b[1] - a[1]).to_radians();
     let h = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
     2.0 * R * h.sqrt().asin()
+}
+
+/// Is a place open at (weekday, minute-of-day), by its raw OSM `opening_hours`?
+///
+/// The full grammar has months, holidays, sunrise offsets and exceptions; evaluating all
+/// of it wrongly would be worse than not trying. So this reads the shapes that cover most
+/// real tags — `24/7`, `Mo-Fr 09:00-18:00`, lists of day spans and time spans, `off` —
+/// and answers `None` for anything else, which the surfaces show as the raw string. An
+/// honest "here are the hours" beats a confident wrong "open".
+pub fn open_now(hours: &str, weekday: u8, minute: u16) -> Option<bool> {
+    let hours = hours.trim();
+    if hours.is_empty() {
+        return None;
+    }
+    if hours == "24/7" {
+        return Some(true);
+    }
+    const DAYS: [&str; 7] = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+
+    // Parse EVERYTHING first, evaluate after: a rule we cannot read anywhere in the tag
+    // means the whole answer is a guess. "Mo-Fr 09:00-18:00; Dec 25 off" on a Tuesday
+    // looks open — unless the Tuesday is Dec 25, which a weekday cannot tell us.
+    enum Times {
+        Off,
+        Spans(Vec<(u16, u16)>),
+    }
+    let mut rules: Vec<([bool; 7], Times)> = Vec::new();
+
+    for rule in hours.split(';') {
+        let rule = rule.trim();
+        if rule.is_empty() {
+            continue;
+        }
+        // "Su off" has no digit, so the keyword must come off before the day/time split.
+        let lower = rule.to_ascii_lowercase();
+        let (days_part, times_part) = if let Some(head) =
+            lower.strip_suffix("off").or_else(|| lower.strip_suffix("closed"))
+        {
+            (rule[..head.len()].trim(), "off")
+        } else {
+            match rule.find(|c: char| c.is_ascii_digit()) {
+                Some(i) if rule[..i].trim().is_empty() => ("Mo-Su", rule),
+                Some(i) => (rule[..i].trim(), rule[i..].trim()),
+                None => (rule.trim(), ""),
+            }
+        };
+
+        let mut days = [false; 7];
+        for span in days_part.split(',') {
+            let span = span.trim();
+            // Case-insensitive: the live map writes "mo-su 09:00-21:00" as happily as
+            // "Mo-Su" — found on the first supermarket tried, not in the spec.
+            if let Some((a, b)) = span.split_once('-') {
+                let a = DAYS.iter().position(|d| d.eq_ignore_ascii_case(a.trim()))?;
+                let b = DAYS.iter().position(|d| d.eq_ignore_ascii_case(b.trim()))?;
+                for (i, d) in days.iter_mut().enumerate() {
+                    // Mo-Fr, and Sa-Tu wrapping the week end.
+                    if (a <= b && i >= a && i <= b) || (a > b && (i >= a || i <= b)) {
+                        *d = true;
+                    }
+                }
+            } else if let Some(d) = DAYS.iter().position(|d| d.eq_ignore_ascii_case(span)) {
+                days[d] = true;
+            } else {
+                // PH, SH, months, sunrise… — tokens whose truth needs a calendar we do
+                // not have. Refusing the whole tag is the only answer that cannot be
+                // wrong.
+                return None;
+            }
+        }
+
+        let times = if times_part.eq_ignore_ascii_case("off") {
+            Times::Off
+        } else {
+            let mut spans = Vec::new();
+            for span in times_part.split(',') {
+                let (a, b) = span.trim().split_once('-')?;
+                let m = |t: &str| -> Option<u16> {
+                    let (h, min) = t.trim().split_once(':')?;
+                    Some(h.parse::<u16>().ok()? * 60 + min.parse::<u16>().ok()?)
+                };
+                spans.push((m(a)?, m(b)?));
+            }
+            Times::Spans(spans)
+        };
+        rules.push((days, times));
+    }
+
+    // Later rules override earlier ones for the days they name — that is what the
+    // semicolon means ("Mo-Sa 10:00-20:00; Su off").
+    let mut answer = Some(false); // a day no rule mentions is closed
+    for (days, times) in &rules {
+        if !days[weekday as usize] {
+            continue;
+        }
+        answer = Some(match times {
+            Times::Off => false,
+            Times::Spans(spans) => spans.iter().any(|&(start, end)| {
+                if start <= end {
+                    (start..end).contains(&minute)
+                } else {
+                    minute >= start || minute < end // 22:00-02:00, the bar shape
+                }
+            }),
+        });
+    }
+    answer
 }
 
 /// Percent-encode a query component. Deliberately tiny — no dependency for the job of
@@ -1667,6 +1869,35 @@ mod tests {
         assert_eq!(enc("cafe & bar"), "cafe%20%26%20bar");
         assert_eq!(enc("Kadıköy"), "Kad%C4%B1k%C3%B6y");
         assert_eq!(enc("plain-Text_1.0~"), "plain-Text_1.0~");
+    }
+
+    /// Hours evaluation must refuse what it cannot read — a confident wrong "open" is the
+    /// one answer worse than none. Weekday 0 = Monday.
+    #[test]
+    fn opening_hours_reads_the_common_shapes_and_refuses_the_rest() {
+        // 24/7 and the everyday shapes.
+        assert_eq!(open_now("24/7", 3, 100), Some(true));
+        assert_eq!(open_now("Mo-Fr 09:00-18:00", 0, 10 * 60), Some(true));
+        assert_eq!(open_now("Mo-Fr 09:00-18:00", 0, 8 * 60), Some(false));
+        assert_eq!(open_now("Mo-Fr 09:00-18:00", 5, 10 * 60), Some(false), "Saturday is not Mo-Fr");
+        // Lists of days and of time spans.
+        assert_eq!(open_now("Mo,We 09:00-12:00,14:00-18:00", 2, 15 * 60), Some(true));
+        assert_eq!(open_now("Mo,We 09:00-12:00,14:00-18:00", 2, 13 * 60), Some(false));
+        // Across midnight — the bar shape.
+        assert_eq!(open_now("Fr-Sa 22:00-02:00", 4, 23 * 60), Some(true));
+        assert_eq!(open_now("Fr-Sa 22:00-02:00", 4, 60), Some(true));
+        assert_eq!(open_now("Fr-Sa 22:00-02:00", 4, 12 * 60), Some(false));
+        // A day marked off.
+        assert_eq!(open_now("Mo-Sa 10:00-20:00; Su off", 6, 12 * 60), Some(false));
+        // Bare times apply to every day.
+        assert_eq!(open_now("08:00-22:00", 6, 12 * 60), Some(true));
+        // The live map's own spelling: lowercase days, found on the first supermarket
+        // tried. Tuesday 19:47 inside 09:00-21:00 is open.
+        assert_eq!(open_now("mo-su 09:00-21:00", 1, 19 * 60 + 47), Some(true));
+        // The honest refusals: exotic grammar is shown, not guessed.
+        assert_eq!(open_now("sunrise-sunset", 1, 700), None);
+        assert_eq!(open_now("Mo-Fr 09:00-18:00; Dec 25 off", 1, 700), None);
+        assert_eq!(open_now("", 1, 700), None);
     }
 
     /// The gate is the rate limit, so it has to actually make the second caller wait.

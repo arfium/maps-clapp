@@ -10,7 +10,7 @@
 //! camera. A human dragging the map changes it sixty times a second, and an agent does not
 //! want sixty notifications about it — see [`AppState::look_at`] and [`worth_announcing`].
 
-use crate::geo::{km_between, Mode, Place, Reach, Route};
+use crate::geo::{km_between, Detail, Mode, Place, Reach, Route};
 use clappkit::{AgentRow, Emit};
 use serde_json::{json, Value};
 
@@ -96,6 +96,9 @@ pub struct AppState {
     /// same journey.
     mode: Mode,
     route: Option<Route>,
+    /// What OSM knows about the selected place beyond its dot — fetched lazily, keyed by
+    /// the place's id so a slow answer cannot dress up a newer selection.
+    detail: Option<Detail>,
     /// Which leg of the route is being travelled right now — `None` is the overview.
     ///
     /// This is the "sonraki durak" the pilot demo is about: the human walks, someone says
@@ -356,6 +359,7 @@ impl AppState {
 
     pub fn set_results(&mut self, query: String, places: Vec<Place>) {
         self.query = query;
+        self.detail = None;
         self.selected = places.first().cloned();
         self.results = places;
     }
@@ -385,6 +389,9 @@ impl AppState {
     /// themselves. The agent's own selection signals nothing.
     pub fn open(&mut self, p: Place, actor: Actor) -> Vec<Emit> {
         self.frame(&p);
+        if self.selected.as_ref().map(|s| s.id.clone()) != Some(p.id.clone()) {
+            self.detail = None; // the old place's phone number is not this place's
+        }
         self.selected = Some(p.clone());
         if actor == Actor::Agent {
             return Vec::new();
@@ -662,6 +669,13 @@ impl AppState {
         }
     }
 
+    /// Adopt a fetched detail — unless the selection has already moved on.
+    pub fn set_detail(&mut self, d: Detail) {
+        if self.selected.as_ref().is_some_and(|p| p.id == d.id) {
+            self.detail = Some(d);
+        }
+    }
+
     pub fn remember_agent(&mut self, caller: &Option<String>) {
         if caller.is_some() {
             self.last_agent = caller.clone();
@@ -758,6 +772,7 @@ impl AppState {
             "query": self.query,
             "results": self.results,
             "selected": self.selected,
+            "detail": self.detail,
             "mode": self.mode,
             "trip": self.trip,
             "awaiting": self.awaiting.as_ref().map(|a| json!({

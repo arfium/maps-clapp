@@ -24,6 +24,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-uti
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
+# Local weekday+minute for the opening-hours evaluation — the one thing std cannot give.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Three open services: Photon (search), Nominatim (precise address + reverse), Valhalla
 # (routing, isochrones). rustls, never native-tls, so the build stays portable.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

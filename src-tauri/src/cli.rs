@@ -283,6 +283,29 @@ fn print_place(a: &Value) {
         println!("{kind}");
     }
     println!("{:.5}, {:.5}", p["lat"].as_f64().unwrap_or(0.0), p["lon"].as_f64().unwrap_or(0.0));
+    print_detail(a);
+}
+
+/// Hours, phone, website — when the background lookup has landed for THIS place. It is
+/// fetched async (the map database is slow and gated), so `select` often answers before
+/// it arrives; `status` a moment later has it.
+fn print_detail(a: &Value) {
+    let d = &a["detail"];
+    if !d.is_object() || d["id"] != a["selected"]["id"] {
+        return;
+    }
+    if let Some(h) = d["hours"].as_str() {
+        match d["open"].as_bool() {
+            Some(true) => println!("open now — {h}"),
+            Some(false) => println!("closed now — {h}"),
+            None => println!("hours: {h}"),
+        }
+    }
+    for (k, label) in [("phone", "phone"), ("website", "web"), ("cuisine", "cuisine"), ("wheelchair", "wheelchair")] {
+        if let Some(x) = d[k].as_str().filter(|s| !s.is_empty()) {
+            println!("{label}: {x}");
+        }
+    }
 }
 
 fn print_route(a: &Value) {
@@ -400,6 +423,7 @@ fn print_status(a: &Value) {
     }
     if let Some(p) = a["selected"].as_object() {
         println!("open: {}", p.get("name").and_then(Value::as_str).unwrap_or(""));
+        print_detail(a);
     }
     let stops = a["trip"].as_array().cloned().unwrap_or_default();
     if !stops.is_empty() {

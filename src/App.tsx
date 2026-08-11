@@ -18,6 +18,9 @@ import {
   type Agent, type Mode, type Place, type Req, type State,
 } from "./bridge";
 
+/** The right-click menu's moment: where on screen, and where on earth. */
+type Ctx = { x: number; y: number; lat: number; lon: number } | null;
+
 /** What the core said about the last thing we asked for. */
 type Note = { text: string; bad?: boolean } | null;
 
@@ -35,6 +38,10 @@ export default function App() {
   // The map is the point of a map app, so the panel gets out of the way on request. The
   // map is told, because framing has to use the width it actually has.
   const [hidden, setHidden] = useState(false);
+  const [menu, setMenu] = useState<Ctx>(null);
+  const [suggestions, setSuggestions] = useState<Place[]>([]);
+  // Typeahead answers can land out of order; only the newest question's answer counts.
+  const suggestSeq = useRef(0);
 
   // "Nearby" needs somewhere to be near. Zoomed out to a hemisphere there is no such
   // place, and the category buttons used to fail with a sentence nobody reads — so they
@@ -75,6 +82,7 @@ export default function App() {
       // because that is a rule about shared state, not about a canvas.
       onMove: (lat, lon, zoom) => void cmd<State, Req>({ cmd: "view", lat, lon, zoom }),
       onPick: (n) => void sayRef.current({ cmd: "select", n }),
+      onContext: (x, y, lat, lon) => setMenu({ x, y, lat, lon }),
     });
   }, []);
 
@@ -135,8 +143,29 @@ export default function App() {
   const search = (q: string) => {
     if (!q.trim()) return;
     typing.current = false;
+    setSuggestions([]);
     void say({ cmd: "find", q });
   };
+
+  // Typeahead. Keystrokes are NOT shared state — a half-typed word is not something the
+  // agent should be told about — so `suggest` reads candidates without touching anything.
+  // The committed search (Enter, or a clicked suggestion) is what both surfaces share.
+  useEffect(() => {
+    if (!typing.current || text.trim().length < 2) {
+      setSuggestions([]);
+      return;
+    }
+    const seq = ++suggestSeq.current;
+    const t = window.setTimeout(async () => {
+      try {
+        const v = await cmd<{ suggestions?: Place[] }, Req>({ cmd: "suggest", q: text });
+        if (seq === suggestSeq.current) setSuggestions(v.suggestions ?? []);
+      } catch {
+        /* typeahead is a convenience; silence is the right failure mode */
+      }
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [text]);
 
   return (
     <div className={hidden ? "app hidden-panel" : "app"}>
@@ -202,6 +231,31 @@ export default function App() {
           </button>
         </form>
 
+        {suggestions.length > 0 && (
+          <ul className="suggest" role="listbox">
+            {suggestions.map((p) => (
+              <li
+                key={p.id}
+                onMouseDown={(e) => {
+                  // mousedown, not click: the input's blur would unmount the row first.
+                  e.preventDefault();
+                  typing.current = false;
+                  setSuggestions([]);
+                  setText(p.name);
+                  void say({
+                    cmd: "pick",
+                    place: { id: p.id, name: p.name, kind: p.kind, lat: p.lat, lon: p.lon },
+                  });
+                }}
+              >
+                <strong>{p.name}</strong>
+                {p.kind && <em>{p.kind}</em>}
+                {p.address && <span className="addr">{p.address}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+
         <div className="chips">
           {CATEGORIES.map((c) => (
             <button
@@ -264,6 +318,36 @@ export default function App() {
         </footer>
       </aside>
 
+      {menu && (
+        <div className="ctxmenu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
+          <header>{coords(menu.lat, menu.lon)}</header>
+          <button
+            onClick={() => {
+              setMenu(null);
+              void say({ cmd: "goto", q: coords(menu.lat, menu.lon) });
+            }}
+          >
+            What's here?
+          </button>
+          <button
+            onClick={() => {
+              setMenu(null);
+              void say({ cmd: "pin", at: coords(menu.lat, menu.lon) });
+            }}
+          >
+            Pin this spot
+          </button>
+          <button
+            onClick={() => {
+              setMenu(null);
+              void say({ cmd: "route", add: coords(menu.lat, menu.lon) });
+            }}
+          >
+            Add to trip
+          </button>
+        </div>
+      )}
+
       {state.busy && (
         <div className="busy" role="status">
           <i /> {state.busy}…
@@ -296,6 +380,8 @@ function Tab(props: {
 
 function Results(props: { state: State; somewhere: boolean; onPick: (n: number) => void }) {
   const { state, somewhere, onPick } = props;
+  const detail =
+    state.detail && state.selected && state.detail.id === state.selected.id ? state.detail : null;
   if (!state.results.length) {
     return (
       <p className="empty">
@@ -318,6 +404,7 @@ function Results(props: { state: State; somewhere: boolean; onPick: (n: number) 
             <strong>{p.name}</strong>
             {p.kind && <em>{p.kind}</em>}
             {p.address && <span className="addr">{p.address}</span>}
+            {state.selected?.id === p.id && detail && <DetailCard d={detail} />}
           </div>
         </li>
       ))}
@@ -484,6 +571,27 @@ function Pins({ state, say }: { state: State; say: (r: Req) => void }) {
         </li>
       ))}
     </ol>
+  );
+}
+
+/** What OSM knows beyond the dot — rendered only under the place it belongs to. */
+function DetailCard({ d }: { d: NonNullable<State["detail"]> }) {
+  return (
+    <div className="detail">
+      {d.hours && (
+        <span className={d.open === true ? "hours open" : d.open === false ? "hours closed" : "hours"}>
+          {d.open === true ? "Open now" : d.open === false ? "Closed now" : "Hours"} · {d.hours}
+        </span>
+      )}
+      {d.phone && <span>{d.phone}</span>}
+      {d.website && (
+        <a href={d.website} target="_blank" rel="noreferrer">
+          {d.website.replace(/^https?:\/\//, "")}
+        </a>
+      )}
+      {d.cuisine && <span>{d.cuisine}</span>}
+      {d.wheelchair === "yes" && <span>wheelchair accessible</span>}
+    </div>
   );
 }
 

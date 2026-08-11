@@ -17,6 +17,7 @@
 //!     to be worth mentioning ([`name_the_view`]).
 
 use crate::geo::{Found, Geo, Mode, Place};
+use chrono::{Datelike, Local, Timelike};
 use crate::state::{plural, Actor, AppState, Pin};
 use crate::CLI;
 use clappkit::app::Reply;
@@ -201,6 +202,7 @@ pub async fn apply(ctx: &Ctx, req: &Value, caller: Option<String>) -> Reply {
                         s.say(format!("{} — {}", p.name, coords(&p)));
                         drop(s);
                         ctx.control.emit_all(emits);
+                        fetch_detail(ctx, p.clone());
                         json!({ "ok": true, "message": p.label(), "place": p })
                     }
                     Err(e) => fail(ctx, e).await,
@@ -302,6 +304,7 @@ pub async fn apply(ctx: &Ctx, req: &Value, caller: Option<String>) -> Reply {
                     s.say(format!("{} — {}", picked.name, coords(&picked)));
                     drop(s);
                     ctx.control.emit_all(opened);
+                    fetch_detail(ctx, picked.clone());
                     json!({ "ok": true, "message": picked.label(), "place": picked })
                 }
                 Some(slot) => {
@@ -544,6 +547,32 @@ pub async fn apply(ctx: &Ctx, req: &Value, caller: Option<String>) -> Reply {
                 }
             }
         }
+
+        // Typeahead for the window, and nothing else: reads no state, changes no state,
+        // signals nobody. The COMMITTED search is what both surfaces share; keystrokes are
+        // not state, exactly as a half-typed word in the box is not.
+        "suggest" => {
+            let bias = ctx.state.lock().await.bias();
+            match ctx.geo.suggest(&text("q"), bias).await {
+                Ok(list) => json!({ "ok": true, "suggestions": list }),
+                Err(_) => json!({ "ok": true, "suggestions": [] }),
+            }
+        }
+
+        // The window opening a place it already fully knows — a clicked suggestion. The
+        // same validation as `seed`: data from a surface is still data.
+        "pick" => match seeded_place(req.get("place").unwrap_or(&Value::Null)) {
+            Some(p) => {
+                let mut s = ctx.state.lock().await;
+                let emits = s.open(p.clone(), actor);
+                s.say(format!("{} — {}", p.name, coords(&p)));
+                drop(s);
+                ctx.control.emit_all(emits);
+                fetch_detail(ctx, p.clone());
+                json!({ "ok": true, "message": p.label(), "place": p })
+            }
+            None => bad("pick needs a place with a name and coordinates"),
+        },
 
         "export" => export(ctx, arg("path"), &text("format")).await,
 
@@ -831,6 +860,30 @@ fn seeded_place(v: &Value) -> Option<Place> {
         return None;
     }
     Some(Place { id: s("id"), name, kind: s("kind"), lat, lon, ..Place::default() })
+}
+
+/// Fetch what OSM knows about a place, in the background, and push it when it lands.
+///
+/// Deliberately not awaited: the Overpass gate is 1.5 s wide, and a selection must answer
+/// now. `set_detail` drops the answer if the selection has moved on, and the TTL cache
+/// makes re-selecting the same place free.
+fn fetch_detail(ctx: &Ctx, p: Place) {
+    let ctx = ctx.clone();
+    tauri::async_runtime::spawn(async move {
+        let now = Local::now();
+        let clock = (
+            now.weekday().num_days_from_monday() as u8,
+            (now.hour() * 60 + now.minute()) as u16,
+        );
+        match ctx.geo.detail(&p, clock).await {
+            Ok(Some(d)) => {
+                ctx.state.lock().await.set_detail(d);
+                push(&ctx).await;
+            }
+            Ok(None) => eprintln!("detail: nothing to look up for {}", p.id),
+            Err(e) => eprintln!("detail: {} failed: {e}", p.id),
+        }
+    });
 }
 
 /// The widest crow-flies gap between consecutive stops: (index of the earlier stop, km).
