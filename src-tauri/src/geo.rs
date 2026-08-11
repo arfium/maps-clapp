@@ -370,9 +370,18 @@ impl Service {
         }
 
         self.gate.pass().await;
-        let v = f().await?;
-        self.cache.lock().await.insert(key.clone(), (Instant::now(), v.clone()));
+        let out = f().await;
+        // The flight entry goes whichever way the fetch went: leaving it behind on an
+        // error would grow the map by one dead lock per failed question, forever.
         self.flights.lock().await.remove(&key);
+        let v = out?;
+        let mut cache = self.cache.lock().await;
+        // A long session asks thousands of different questions; entries only left when
+        // re-asked, so sweep the expired ones once the map gets big. O(n), rare.
+        if cache.len() >= 512 {
+            cache.retain(|_, (at, _)| at.elapsed() < self.ttl);
+        }
+        cache.insert(key, (Instant::now(), v.clone()));
         Ok(v)
     }
 }
@@ -731,21 +740,16 @@ impl Overpass {
         let body = self
             .svc
             .get(q.clone(), move || async move {
-                let mut last = String::new();
-                for (i, url) in OVERPASS.iter().enumerate() {
+                // Only the LAST endpoint's failure is reported; the others are noise
+                // about servers the user never chose.
+                let mut last = anyhow!("no Overpass endpoint configured");
+                for url in OVERPASS {
                     match ask_overpass(http, url, &q).await {
                         Ok(v) => return Ok(v),
-                        Err(e) => {
-                            last = e.to_string();
-                            // Only the LAST endpoint's failure is worth reporting; the
-                            // others are noise about servers the user never chose.
-                            if i + 1 == OVERPASS.len() {
-                                bail!("{last}");
-                            }
-                        }
+                        Err(e) => last = e,
                     }
                 }
-                bail!("{last}")
+                Err(last)
             })
             .await?;
 

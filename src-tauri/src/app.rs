@@ -290,31 +290,36 @@ pub async fn apply(ctx: &Ctx, req: &Value, caller: Option<String>) -> Reply {
         "select" => {
             let n = req.get("n").and_then(Value::as_u64).unwrap_or(0) as usize;
             let mut s = ctx.state.lock().await;
-            let picked = match s.select(n, actor) {
-                Ok(p) => p,
+            let (picked, opened) = match s.select(n, actor) {
+                Ok(v) => v,
                 Err(e) => {
                     drop(s);
                     return reply(ctx, bad(&e)).await;
                 }
             };
-            if !s.resolve_stop(picked.clone()) {
-                s.say(format!("{} — {}", picked.name, coords(&picked)));
-                drop(s);
-                json!({ "ok": true, "message": picked.label(), "place": picked })
-            } else {
-                let next = s.awaiting().cloned();
-                let emits = s.trip_changed(actor);
-                drop(s);
-                ctx.control.emit_all(emits);
-                // Another stop still to choose: put ITS candidates up, same as before.
-                if let Some(a) = next {
-                    begin(ctx, &format!("looking for {}", a.query)).await;
-                    let bias = ctx.state.lock().await.bias();
-                    if let Ok(list) = ctx.geo.find(&a.query, bias).await {
-                        ctx.state.lock().await.set_results(a.query.clone(), list);
-                    }
+            match s.resolve_stop(picked.clone()) {
+                None => {
+                    s.say(format!("{} — {}", picked.name, coords(&picked)));
+                    drop(s);
+                    ctx.control.emit_all(opened);
+                    json!({ "ok": true, "message": picked.label(), "place": picked })
                 }
-                finish_trip(ctx, Some(format!("stop {} is {}", picked_slot(ctx).await, picked.name))).await
+                Some(slot) => {
+                    let next = s.awaiting().cloned();
+                    let mut emits = opened;
+                    emits.extend(s.trip_changed(actor));
+                    drop(s);
+                    ctx.control.emit_all(emits);
+                    // Another stop still to choose: put ITS candidates up, same as before.
+                    if let Some(a) = next {
+                        begin(ctx, &format!("looking for {}", a.query)).await;
+                        let bias = ctx.state.lock().await.bias();
+                        if let Ok(list) = ctx.geo.find(&a.query, bias).await {
+                            ctx.state.lock().await.set_results(a.query.clone(), list);
+                        }
+                    }
+                    finish_trip(ctx, Some(format!("stop {} is {}", slot + 1, picked.name))).await
+                }
             }
         }
 
@@ -361,7 +366,7 @@ pub async fn apply(ctx: &Ctx, req: &Value, caller: Option<String>) -> Reply {
                         ctx.state.lock().await.add_stop(here);
                     }
                 }
-                push_stop(ctx, &add, actor).await;
+                push_stop(ctx, &add).await;
                 let emits = ctx.state.lock().await.trip_changed(actor);
                 ctx.control.emit_all(emits);
                 finish_trip(ctx, None).await
@@ -372,7 +377,7 @@ pub async fn apply(ctx: &Ctx, req: &Value, caller: Option<String>) -> Reply {
                 let start = if tokens.len() == 1 { anchor(ctx, "").await.ok() } else { None };
                 ctx.state.lock().await.set_trip(start.into_iter().collect());
                 for q in &tokens {
-                    push_stop(ctx, q, actor).await;
+                    push_stop(ctx, q).await;
                 }
                 let emits = ctx.state.lock().await.trip_changed(actor);
                 ctx.control.emit_all(emits);
@@ -503,23 +508,13 @@ fn bad(why: &str) -> Value {
     json!({ "ok": false, "error": why })
 }
 
-/// Which stop number was just filled, for the sentence both surfaces show.
-async fn picked_slot(ctx: &Ctx) -> usize {
-    let s = ctx.state.lock().await;
-    match s.awaiting() {
-        // Still choosing something: the one just filled is the one before it.
-        Some(a) => a.slot,
-        None => s.trip().len(),
-    }
-}
-
 /// Add one stop to the trip, from whatever the caller typed.
 ///
 /// A stop may be a name, an address, a coordinate, `#3` (a result already on screen) or a
 /// pin's name — so once you have searched for something, you never have to type it again.
 /// When the name is genuinely ambiguous this does not guess: it parks a visible placeholder
 /// and puts the candidates in `results`, where a `select` from either surface fills it.
-async fn push_stop(ctx: &Ctx, q: &str, actor: Actor) {
+async fn push_stop(ctx: &Ctx, q: &str) {
     // Already on screen, by number.
     let n = q.strip_prefix('#').unwrap_or(q).parse::<usize>().ok();
     if let Some(n) = n {
@@ -550,7 +545,6 @@ async fn push_stop(ctx: &Ctx, q: &str, actor: Actor) {
             let mut s = ctx.state.lock().await;
             s.await_stop(q);
             s.set_results(q.to_string(), list);
-            let _ = actor;
         }
         Err(e) => {
             let mut s = ctx.state.lock().await;
@@ -653,7 +647,7 @@ async fn name_the_view(ctx: &Ctx, lat: f64, lon: f64) {
 /// Write what is on the map, as GeoJSON or GPX.
 async fn export(ctx: &Ctx, path: Option<String>, format: &str) -> Value {
     let s = ctx.state.lock().await;
-    if s.pins().is_empty() && s.results().is_empty() && s.selected().is_none() {
+    if s.pins().is_empty() && s.results().is_empty() && s.selected().is_none() && s.trip().is_empty() {
         return bad("there is nothing on the map to export yet — search, route or pin something first");
     }
     let gpx = matches!(format.trim().to_ascii_lowercase().as_str(), "gpx");

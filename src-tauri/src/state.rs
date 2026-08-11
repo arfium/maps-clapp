@@ -201,17 +201,18 @@ impl AppState {
         })
     }
 
-    /// Fill the waiting slot, and move the question on to the next one. Returns false when
-    /// nothing was waiting, so the caller can treat that `select` as an ordinary "open".
-    pub fn resolve_stop(&mut self, p: Place) -> bool {
-        let Some(a) = self.awaiting.take() else { return false };
+    /// Fill the waiting slot, and move the question on to the next one. Returns the slot
+    /// that was filled (so the answer can name the right stop), or `None` when nothing was
+    /// waiting — that `select` was an ordinary "open".
+    pub fn resolve_stop(&mut self, p: Place) -> Option<usize> {
+        let a = self.awaiting.take()?;
         if a.slot < self.trip.len() {
             self.trip[a.slot] = p;
         } else {
             self.trip.push(p);
         }
         self.awaiting = self.next_choosing();
-        true
+        Some(a.slot)
     }
 
     /// Drop stop N (1-based, the numbering both surfaces show).
@@ -352,7 +353,11 @@ impl AppState {
     }
 
     /// Open one result by its 1-based number, the way both surfaces show them.
-    pub fn select(&mut self, n: usize, actor: Actor) -> Result<Place, String> {
+    /// Returns the place AND the signals opening it produced. A signal that is returned
+    /// and dropped is indistinguishable from one that was never emitted — which is exactly
+    /// how a human's click on a result stopped producing `place.opened` for a while, with
+    /// nothing anywhere to say so.
+    pub fn select(&mut self, n: usize, actor: Actor) -> Result<(Place, Vec<Emit>), String> {
         let p = self
             .results
             .get(n.wrapping_sub(1))
@@ -361,8 +366,8 @@ impl AppState {
                 0 => "there are no results to open — search for something first".to_string(),
                 len => format!("there are only {len} results; {n} is not one of them"),
             })?;
-        self.open(p.clone(), actor);
-        Ok(p)
+        let emits = self.open(p.clone(), actor);
+        Ok((p, emits))
     }
 
     /// Open a place, wherever it came from.
@@ -486,8 +491,13 @@ impl AppState {
                 self.query.clear();
                 self.selected = None;
                 self.reach = None;
+                let had_trip = !self.trip.is_empty();
                 self.clear_trip();
-                Ok(("cleared the map — the pins are still there".into(), Vec::new()))
+                // The same edit signals the same way however it was spelled: an agent that
+                // is told about `clear trip` but not about `clear all` has been lied to by
+                // omission.
+                let emits = if had_trip { self.trip_changed(actor) } else { Vec::new() };
+                Ok(("cleared the map — the pins are still there".into(), emits))
             }
             other => Err(format!(
                 "clear what? results, trip, reach, pins, or all — not \"{other}\""
@@ -895,12 +905,37 @@ mod tests {
 
     // ── results, pins, clearing ──────────────────────────────────────────────
 
+    /// The regression this review existed to catch: `select` used to call `open` and drop
+    /// its return value, so a human clicking a result never emitted `place.opened` — the
+    /// app's whole reason to exist, silently off on its most common path.
+    #[test]
+    fn a_humans_selection_rides_their_next_prompt_and_an_agents_does_not() {
+        let mut s = AppState::new();
+        s.set_results("cafe".into(), vec![place("a", 1.0, 1.0), place("b", 2.0, 2.0)]);
+        let (_, emits) = s.select(2, Actor::Human).unwrap();
+        assert_eq!(emits.len(), 1, "a human's click must emit");
+        assert_eq!(emits[0].id, "place.opened");
+        let (_, emits) = s.select(1, Actor::Agent).unwrap();
+        assert!(emits.is_empty(), "the agent already knows what it opened");
+    }
+
+    #[test]
+    fn clear_all_reports_the_trip_it_took() {
+        let mut s = AppState::new();
+        s.set_trip(vec![place("A", 1.0, 1.0), place("B", 2.0, 2.0)]);
+        let (_, emits) = s.clear("all", Actor::Human).unwrap();
+        assert_eq!(emits.len(), 1, "an agent must hear about the trip going, however it was cleared");
+        assert_eq!(emits[0].id, "trip.changed");
+        let (_, emits) = s.clear("all", Actor::Human).unwrap();
+        assert!(emits.is_empty(), "clearing an already-empty trip is not news");
+    }
+
     #[test]
     fn selecting_out_of_range_says_what_is_actually_there() {
         let mut s = AppState::new();
         assert!(s.select(1, Actor::Human).unwrap_err().contains("no results"));
         s.set_results("cafe".into(), vec![place("a", 1.0, 1.0), place("b", 2.0, 2.0)]);
-        assert_eq!(s.select(2, Actor::Human).unwrap().name, "b");
+        assert_eq!(s.select(2, Actor::Human).unwrap().0.name, "b");
         assert!(s.select(7, Actor::Human).unwrap_err().contains("only 2"));
         assert!(s.select(0, Actor::Human).is_err(), "the numbering both surfaces show is 1-based");
     }
@@ -1029,7 +1064,7 @@ mod tests {
         s.await_stop("Kadıköy");
         assert_eq!(s.awaiting().unwrap().slot, 1, "one question at a time, in order");
 
-        assert!(s.resolve_stop(place("Taksim Meydanı", 41.0369, 28.9850)));
+        assert_eq!(s.resolve_stop(place("Taksim Meydanı", 41.0369, 28.9850)), Some(1));
         assert_eq!(s.trip()[1].name, "Taksim Meydanı");
         assert_eq!(
             s.awaiting().map(|a| a.query.clone()),
@@ -1038,7 +1073,7 @@ mod tests {
         );
         assert!(!s.trip_ready());
 
-        assert!(s.resolve_stop(place("Kadıköy İskele", 40.9906, 29.0217)));
+        assert_eq!(s.resolve_stop(place("Kadıköy İskele", 40.9906, 29.0217)), Some(2));
         assert!(s.awaiting().is_none());
         assert!(s.trip_ready(), "no questions left, so route it");
     }
@@ -1046,7 +1081,7 @@ mod tests {
     #[test]
     fn selecting_with_nothing_pending_is_just_opening_a_place() {
         let mut s = AppState::new();
-        assert!(!s.resolve_stop(place("Somewhere", 1.0, 1.0)), "no question was asked");
+        assert!(s.resolve_stop(place("Somewhere", 1.0, 1.0)).is_none(), "no question was asked");
         assert!(s.trip().is_empty(), "an ordinary selection must not join the trip");
     }
 

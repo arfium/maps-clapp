@@ -46,7 +46,7 @@ usage:
       --note "<text>"               a note to carry on the pin
       --rm <N>                      remove pin number N
   maps pins                        list the pins with their coordinates
-  maps clear [results|route|reach|pins|all]
+  maps clear [results|trip|reach|pins|all]
                                     clear one layer, or all of them (`all` keeps the pins)
   maps export [<file>]             write the map as GeoJSON; prints the path
       --gpx                         write GPX instead (waypoints + the route as a track)
