@@ -340,6 +340,15 @@ function RoutePanel(props: {
 
   return (
     <div className="route">
+      {stops.length >= 3 && !state.awaiting && (
+        <button
+          className="optimize"
+          title="Reorder the middle stops for the shortest journey (first and last stay put)"
+          onClick={() => say({ cmd: "route", optimize: true })}
+        >
+          ⇅ Best order
+        </button>
+      )}
       <ol className="stops">
         {stops.map((p, i) => (
           <li key={`${p.id}-${i}`} className={p.kind === CHOOSING ? "choosing" : ""}>
@@ -399,10 +408,28 @@ function RoutePanel(props: {
             {/* The one thing a routing answer must never let anybody assume. */}
             <em title="No open routing service has traffic data">no live traffic</em>
           </div>
+          {/* The journey cursor: the same next/back the agent types, as arrows. The
+              window highlights the leg, the map frames it, and the agent hears about it
+              on the human's next prompt — one cursor, three views of it. */}
+          <div className="walker">
+            <button
+              className="ghost"
+              disabled={state.leg === null}
+              onClick={() => say({ cmd: "leg", dir: "back" })}
+            >
+              ‹ Back
+            </button>
+            <span>
+              {state.leg === null
+                ? "whole trip"
+                : `leg ${state.leg + 1} of ${state.route.legs.length}`}
+            </span>
+            <button onClick={() => say({ cmd: "leg", dir: "next" })}>Next ›</button>
+          </div>
           {state.route.legs.map((leg, i) => (
-            <div key={i} className="leg">
+            <div key={i} className={state.leg === i ? "leg active" : "leg"}>
               {state.route!.legs.length > 1 && (
-                <h4>
+                <h4 onClick={() => say({ cmd: "leg", n: i })} title="Focus this leg">
                   {i + 1}. {leg.from} → {leg.to}
                   <b>
                     {distance(leg.km)} · {duration(leg.secs)}

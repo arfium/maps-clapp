@@ -341,8 +341,53 @@ pub async fn apply(ctx: &Ctx, req: &Value, caller: Option<String>) -> Reply {
                 .unwrap_or_default();
             let add = text("add");
             let rm = req.get("rm").and_then(Value::as_u64).map(|n| n as usize);
+            let optimize = req.get("optimize").and_then(Value::as_bool).unwrap_or(false);
 
-            if let Some(n) = rm {
+            if optimize {
+                // Build first if stops were given alongside; then reorder what is ready.
+                if !tokens.is_empty() {
+                    begin(ctx, "building the trip").await;
+                    ctx.state.lock().await.set_trip(Vec::new());
+                    for q in &tokens {
+                        push_stop(ctx, q).await;
+                    }
+                }
+                let (stops, mode, ready) = {
+                    let s = ctx.state.lock().await;
+                    (s.trip().to_vec(), s.mode(), s.trip_ready())
+                };
+                if !ready {
+                    // An open question first: optimising a trip with a hole in it would
+                    // mean guessing the very thing the question exists to ask.
+                    return reply(ctx, finish_trip(ctx, None).await).await;
+                }
+                if stops.len() < 3 {
+                    return reply(ctx, bad("two stops have only one order — add a third before optimising")).await;
+                }
+                begin(ctx, "finding the best order").await;
+                match ctx.geo.optimize(&stops, mode).await {
+                    Ok((reordered, r)) => {
+                        let order = r.stops.join(" → ");
+                        let message = format!(
+                            "best order: {order} — {} · {} {} ({} steps, no live traffic)",
+                            duration(r.secs),
+                            distance(r.km),
+                            mode.label(),
+                            r.steps(),
+                        );
+                        let mut s = ctx.state.lock().await;
+                        s.busy(None);
+                        s.set_trip(reordered);
+                        s.set_route(r);
+                        s.say(message.clone());
+                        let emits = s.trip_changed(actor);
+                        drop(s);
+                        ctx.control.emit_all(emits);
+                        json!({ "ok": true, "message": message })
+                    }
+                    Err(e) => fail(ctx, e).await,
+                }
+            } else if let Some(n) = rm {
                 let mut s = ctx.state.lock().await;
                 match s.remove_stop(n) {
                     Ok(name) => {
@@ -443,6 +488,34 @@ pub async fn apply(ctx: &Ctx, req: &Value, caller: Option<String>) -> Reply {
                     let left = s.pins().len();
                     let message = format!("{left} pin{} left", plural(left));
                     s.say(message.clone());
+                    drop(s);
+                    ctx.control.emit_all(emits);
+                    json!({ "ok": true, "message": message })
+                }
+                Err(e) => {
+                    drop(s);
+                    bad(&e)
+                }
+            }
+        }
+
+        // The leg cursor: where the journey stands. `dir` from the next/back verbs and
+        // the window's arrows; `n` from clicking a leg heading. The cursor is shared state
+        // like everything else — the agent guiding by voice and the window highlighting a
+        // stretch of the line are pointing at the same leg.
+        "leg" => {
+            let mut s = ctx.state.lock().await;
+            let moved = if let Some(n) = req.get("n").and_then(Value::as_u64) {
+                s.jump_leg(n as usize)
+            } else if text("dir") == "back" {
+                s.step_leg(-1)
+            } else {
+                s.step_leg(1)
+            };
+            match moved {
+                Ok(message) => {
+                    s.say(message.clone());
+                    let emits = s.leg_changed(actor);
                     drop(s);
                     ctx.control.emit_all(emits);
                     json!({ "ok": true, "message": message })
@@ -588,6 +661,33 @@ async fn finish_trip(ctx: &Ctx, prefix: Option<String>) -> Value {
         return json!({ "ok": true, "message": message });
     }
 
+    // Name the suspicious stop BEFORE the router refuses with an opaque limit error.
+    // "Path distance exceeds the max distance limit: 200000 meters" happened live, and it
+    // does not say that "Cihangir" resolved to a village 400 km away — this does.
+    if let Some((i, gap)) = widest_gap(&stops) {
+        let limit = match mode {
+            Mode::Walk => 120.0,
+            Mode::Bike => 250.0,
+            Mode::Drive => 4_000.0,
+        };
+        if gap > limit {
+            let mut s = ctx.state.lock().await;
+            s.busy(None);
+            let why = format!(
+                "stop {} ({}) is {} from stop {} ({}) — probably not the place you meant. \
+                 `maps route --rm {}` drops it; searching first narrows the guess",
+                i + 2,
+                stops[i + 1].name,
+                distance(gap),
+                i + 1,
+                stops[i].name,
+                i + 2,
+            );
+            s.say(why.clone());
+            return json!({ "ok": false, "error": why });
+        }
+    }
+
     match ctx.geo.route(&stops, mode).await {
         Ok(r) => {
             let message = format!(
@@ -731,6 +831,15 @@ fn seeded_place(v: &Value) -> Option<Place> {
         return None;
     }
     Some(Place { id: s("id"), name, kind: s("kind"), lat, lon, ..Place::default() })
+}
+
+/// The widest crow-flies gap between consecutive stops: (index of the earlier stop, km).
+fn widest_gap(stops: &[Place]) -> Option<(usize, f64)> {
+    stops
+        .windows(2)
+        .enumerate()
+        .map(|(i, w)| (i, crate::geo::km_between([w[0].lat, w[0].lon], [w[1].lat, w[1].lon])))
+        .max_by(|a, b| a.1.total_cmp(&b.1))
 }
 
 fn num(req: &Value, k: &str) -> f64 {

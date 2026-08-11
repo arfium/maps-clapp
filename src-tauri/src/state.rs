@@ -96,6 +96,13 @@ pub struct AppState {
     /// same journey.
     mode: Mode,
     route: Option<Route>,
+    /// Which leg of the route is being travelled right now — `None` is the overview.
+    ///
+    /// This is the "sonraki durak" the pilot demo is about: the human walks, someone says
+    /// `next`, and both surfaces move to the same leg. It lives here and not in the window
+    /// because "where are we in the journey" is a fact about the journey, not about a
+    /// screen — the agent guiding by voice needs the same cursor the window highlights.
+    leg: Option<usize>,
     reach: Option<Reach>,
     pins: Vec<Pin>,
     /// What is in flight, so both surfaces can show the same spinner with the same words.
@@ -236,6 +243,7 @@ impl AppState {
         self.trip.clear();
         self.awaiting = None;
         self.route = None;
+        self.leg = None;
     }
 
     /// Is the trip ready to be routed — at least two stops, none of them still a question?
@@ -394,7 +402,92 @@ impl AppState {
         }]
     }
 
+    #[cfg(test)]
+    fn leg(&self) -> Option<usize> {
+        self.leg
+    }
+
+    /// Move the leg cursor. `+1` is next, `-1` is back; `None`→first on next, first→`None`
+    /// (the overview) on back. At the last leg, `next` says so instead of wrapping — you
+    /// have arrived, and pretending otherwise would walk somebody in a circle.
+    pub fn step_leg(&mut self, dir: i8) -> Result<String, String> {
+        let legs = self
+            .route
+            .as_ref()
+            .map(|r| r.legs.len())
+            .ok_or_else(|| "no route to walk yet — plan a trip first".to_string())?;
+        let next = match (self.leg, dir >= 0) {
+            (None, true) => Some(0),
+            (Some(i), true) if i + 1 < legs => Some(i + 1),
+            (Some(_), true) => {
+                return Ok("end of the trip — you have arrived".to_string());
+            }
+            (None, false) => return Err("already looking at the whole trip".to_string()),
+            (Some(0), false) => None,
+            (Some(i), false) => Some(i - 1),
+        };
+        self.leg = next;
+        Ok(self.leg_sentence())
+    }
+
+    /// Jump straight to leg `i` (0-based, the window clicking a leg header).
+    pub fn jump_leg(&mut self, i: usize) -> Result<String, String> {
+        let legs = self
+            .route
+            .as_ref()
+            .map(|r| r.legs.len())
+            .ok_or_else(|| "no route to walk yet — plan a trip first".to_string())?;
+        if i >= legs {
+            return Err(format!("the route has {legs} leg{}; there is no leg {}", plural(legs), i + 1));
+        }
+        self.leg = Some(i);
+        Ok(self.leg_sentence())
+    }
+
+    /// The one sentence both surfaces say about where the journey stands.
+    fn leg_sentence(&self) -> String {
+        let Some(r) = &self.route else { return String::new() };
+        match self.leg {
+            None => format!("the whole trip — {}", r.stops.join(" → ")),
+            Some(i) => {
+                let l = &r.legs[i];
+                format!(
+                    "leg {} of {} — {} → {} ({}, {})",
+                    i + 1,
+                    r.legs.len(),
+                    l.from,
+                    l.to,
+                    crate::app::distance(l.km),
+                    crate::app::duration(l.secs),
+                )
+            }
+        }
+    }
+
+    /// A human moving the cursor rides their next prompt — "how far to the ferry?" is
+    /// about the leg they just advanced to. The agent's own `next` signals nothing.
+    pub fn leg_changed(&self, actor: Actor) -> Vec<Emit> {
+        if actor == Actor::Agent {
+            return Vec::new();
+        }
+        let Some(r) = &self.route else { return Vec::new() };
+        let payload = match self.leg {
+            None => json!({ "overview": true, "stops": r.stops }),
+            Some(i) => {
+                let l = &r.legs[i];
+                json!({
+                    "n": i + 1, "of": r.legs.len(),
+                    "from": l.from, "to": l.to,
+                    "km": round2(l.km), "minutes": round1(l.secs / 60.0),
+                })
+            }
+        };
+        vec![Emit { id: "leg".into(), target: Vec::new(), payload }]
+    }
+
     pub fn set_route(&mut self, r: Route) {
+        // A new line is a new journey: whatever leg somebody was on belongs to the old one.
+        self.leg = None;
         self.route = Some(r);
         // A route and a reach are two answers to different questions; showing both at once
         // is two overlapping polygons and no clarity.
@@ -671,6 +764,7 @@ impl AppState {
                 "slot": a.slot, "n": a.slot + 1, "query": a.query,
             })),
             "route": self.route,
+            "leg": self.leg,
             "reach": self.reach,
             "pins": self.pins.iter().map(|p| json!({
                 "name": p.name, "lat": round6(p.lat), "lon": round6(p.lon), "note": p.note,
@@ -793,11 +887,13 @@ mod tests {
             shape: vec![[2.0, 48.0], [2.1, 48.1]],
             legs: stops
                 .windows(2)
-                .map(|w| Leg {
+                .enumerate()
+                .map(|(i, w)| Leg {
                     from: w[0].into(),
                     to: w[1].into(),
                     km: 2.1,
                     secs: 415.0,
+                    at: i,
                     steps: vec![],
                 })
                 .collect(),
@@ -1141,6 +1237,61 @@ mod tests {
         assert_eq!(b.trip().len(), 2, "the plan is the human's");
         assert!(b.snapshot()["route"].is_null(), "the line is a derived answer");
         assert!(b.trip_ready());
+    }
+
+    // ── the leg cursor ───────────────────────────────────────────────────────
+
+    #[test]
+    fn next_walks_the_legs_and_says_when_you_have_arrived() {
+        let mut s = AppState::new();
+        assert!(s.step_leg(1).is_err(), "no route, no walking");
+        s.set_trip(vec![place("A", 1.0, 1.0), place("B", 2.0, 2.0), place("C", 3.0, 3.0)]);
+        s.set_route(route(Mode::Walk, &["A", "B", "C"]));
+        assert_eq!(s.leg(), None, "a fresh route starts at the overview");
+
+        assert!(s.step_leg(1).unwrap().starts_with("leg 1 of 2"));
+        assert!(s.step_leg(1).unwrap().starts_with("leg 2 of 2"));
+        assert_eq!(s.step_leg(1).unwrap(), "end of the trip — you have arrived");
+        assert_eq!(s.leg(), Some(1), "arrival does not wrap around");
+
+        assert!(s.step_leg(-1).unwrap().starts_with("leg 1"));
+        assert!(s.step_leg(-1).unwrap().starts_with("the whole trip"));
+        assert_eq!(s.leg(), None);
+        assert!(s.step_leg(-1).is_err(), "there is nothing before the overview");
+    }
+
+    #[test]
+    fn a_new_route_forgets_the_old_journeys_leg() {
+        let mut s = AppState::new();
+        s.set_trip(vec![place("A", 1.0, 1.0), place("B", 2.0, 2.0)]);
+        s.set_route(route(Mode::Walk, &["A", "B"]));
+        s.step_leg(1).unwrap();
+        assert_eq!(s.leg(), Some(0));
+        s.set_route(route(Mode::Drive, &["A", "B"]));
+        assert_eq!(s.leg(), None, "the cursor belonged to the old line");
+    }
+
+    #[test]
+    fn jumping_to_a_leg_is_bounded_by_the_route() {
+        let mut s = AppState::new();
+        s.set_trip(vec![place("A", 1.0, 1.0), place("B", 2.0, 2.0), place("C", 3.0, 3.0)]);
+        s.set_route(route(Mode::Walk, &["A", "B", "C"]));
+        assert!(s.jump_leg(1).unwrap().starts_with("leg 2 of 2"));
+        assert!(s.jump_leg(5).unwrap_err().contains("2 legs"));
+    }
+
+    /// The signal that makes "guide me as I walk" work: the human pressing Next rides
+    /// their next prompt; the agent's own `next` tells it nothing it did not do.
+    #[test]
+    fn only_a_humans_leg_move_signals() {
+        let mut s = AppState::new();
+        s.set_trip(vec![place("A", 1.0, 1.0), place("B", 2.0, 2.0)]);
+        s.set_route(route(Mode::Walk, &["A", "B"]));
+        s.step_leg(1).unwrap();
+        let e = s.leg_changed(Actor::Human);
+        assert_eq!(e[0].id, "leg");
+        assert_eq!(e[0].payload["n"], json!(1));
+        assert!(s.leg_changed(Actor::Agent).is_empty());
     }
 
     // ── what survives a restart ──────────────────────────────────────────────

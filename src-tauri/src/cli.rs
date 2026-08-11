@@ -35,12 +35,16 @@ usage:
                                     as many stops as you like, in order
       --add "<place>"               append a stop to the trip you already have
       --rm <N>                      drop stop N
+      --optimize                    reorder the middle stops for the shortest journey
       --mode drive|bike|walk        how to travel (shared with the window)
     a stop is a name, an address, "41.0082, 28.9784", #3 (a result on screen)
     or the name of one of your pins
   maps isochrone <MINUTES>         draw how far you can get in that long
       --from "<place>"              default: what is open, or the map's centre
       --mode drive|bike|walk        default walk
+  maps next                        advance to the next leg of the route — the window
+                                    highlights it and frames it; at the end, says so
+  maps back                        previous leg, or back to the whole-trip overview
   maps pin ["<name>"]              keep the open place (or the map's centre) as a pin
       --at "<place>"                pin somewhere else instead
       --note "<text>"               a note to carry on the pin
@@ -120,6 +124,7 @@ pub async fn run(args: Vec<String>) -> ! {
             "stops": f.positional,
             "add": f.value("--add").unwrap_or_default(),
             "rm": f.number("--rm"),
+            "optimize": f.has("--optimize"),
             "mode": f.value("--mode").unwrap_or_default(),
             "agent": agent,
         }),
@@ -148,6 +153,10 @@ pub async fn run(args: Vec<String>) -> ! {
                 "agent": agent,
             }),
         },
+
+        // Walking the journey. One shared cursor, two spellings of moving it.
+        "next" => json!({ "cmd": "leg", "dir": "next", "agent": agent }),
+        "back" => json!({ "cmd": "leg", "dir": "back", "agent": agent }),
 
         "pins" => json!({ "cmd": "pins", "agent": agent }),
 
@@ -195,6 +204,7 @@ pub async fn run(args: Vec<String>) -> ! {
 
     match verb {
         "find" | "nearby" => print_results(&answer, f.number("--n").or(f.number("-n"))),
+        "next" | "back" => print_leg(&answer),
         "route" => print_route(&answer),
         "pins" => print_pins(&answer),
         "status" => print_status(&answer),
@@ -312,6 +322,22 @@ fn print_route(a: &Value) {
                 if km >= 0.05 { format!("  ({})", crate::app::distance(km)) } else { String::new() }
             );
         }
+    }
+}
+
+/// The active leg: the sentence, then its turns — what somebody mid-journey needs, and
+/// nothing about the legs they are not on.
+fn print_leg(a: &Value) {
+    println!("{}", a["message"].as_str().unwrap_or(""));
+    let Some(i) = a["leg"].as_u64() else { return };
+    let steps = a["route"]["legs"][i as usize]["steps"].as_array().cloned().unwrap_or_default();
+    for s in &steps {
+        let km = s["km"].as_f64().unwrap_or(0.0);
+        println!(
+            "  {}{}",
+            s["instruction"].as_str().unwrap_or(""),
+            if km >= 0.05 { format!("  ({})", crate::app::distance(km)) } else { String::new() }
+        );
     }
 }
 

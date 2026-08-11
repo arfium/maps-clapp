@@ -312,7 +312,8 @@ const ROUTE = {
           "secs": 8.5,
           "at": 27
         }
-      ]
+      ],
+      "at": 0
     },
     {
       "from": "Musee d'Orsay",
@@ -356,7 +357,8 @@ const ROUTE = {
           "secs": 83.6,
           "at": 64
         }
-      ]
+      ],
+      "at": 35
     }
   ]
 } as const;
@@ -378,6 +380,7 @@ const SNAPSHOT: State = {
   awaiting: null,
   mode: "walk",
   route: ROUTE as unknown as State["route"],
+  leg: null,
   reach: null,
   pins: [
     { name: "Eiffel Tower", lat: 48.8584, lon: 2.2945, note: "meet here at 9" },

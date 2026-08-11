@@ -39,6 +39,8 @@ export type Leg = {
   to: string;
   km: number;
   secs: number;
+  /** Index into `Route.shape` where this leg begins — how the active leg is sliced out. */
+  at: number;
   steps: Step[];
 };
 
@@ -90,6 +92,8 @@ export type State = {
   /** How the trip is travelled — shared, not a window control. */
   mode: Mode;
   route: Route | null;
+  /** Which leg is being travelled — null is the overview. Shared, like everything. */
+  leg: number | null;
   reach: Reach | null;
   pins: Pin[];
   /** What is in flight, in words. Both surfaces show this same string. */
@@ -108,6 +112,7 @@ export const EMPTY: State = {
   awaiting: null,
   mode: "drive",
   route: null,
+  leg: null,
   reach: null,
   pins: [],
   busy: null,
@@ -124,7 +129,8 @@ export type Req =
   | { cmd: "nearby"; q: string }
   | { cmd: "seed"; q: string; places: { id: string; name: string; kind: string; lat: number; lon: number }[] }
   | { cmd: "select"; n: number }
-  | { cmd: "route"; stops?: string[]; add?: string; rm?: number; mode?: Mode }
+  | { cmd: "route"; stops?: string[]; add?: string; rm?: number; mode?: Mode; optimize?: boolean }
+  | { cmd: "leg"; dir?: "next" | "back"; n?: number }
   | { cmd: "isochrone"; minutes: number; from?: string; mode?: Mode }
   | { cmd: "pin"; name?: string; at?: string; note?: string }
   | { cmd: "unpin"; n: number }

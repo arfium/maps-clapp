@@ -235,6 +235,9 @@ pub struct Leg {
     pub to: String,
     pub km: f64,
     pub secs: f64,
+    /// Index into [`Route::shape`] where this leg begins — how the window highlights the
+    /// leg being walked without a second geometry.
+    pub at: usize,
     pub steps: Vec<Step>,
 }
 
@@ -277,6 +280,10 @@ pub trait Router {
     /// pairs and stitching the answers back together would give a different (and worse)
     /// route than asking once. A router optimises across the stops it is told about.
     async fn route(&self, stops: &[Place], mode: Mode) -> Result<Route>;
+    /// Reorder the middle stops for the shortest journey (first and last stay fixed), and
+    /// answer with the stops in their new order plus the route through them — one request,
+    /// because the optimiser's answer IS a route and asking again would waste the work.
+    async fn optimize(&self, stops: &[Place], mode: Mode) -> Result<(Vec<Place>, Route)>;
     async fn reach(&self, at: &Place, minutes: u32, mode: Mode) -> Result<Reach>;
 }
 
@@ -885,80 +892,38 @@ impl Router for Valhalla {
         if stops.len() < 2 {
             bail!("a route needs at least two stops");
         }
-        // Every stop is a `break`: Valhalla ends a leg and issues an arrival instruction at
-        // each one. `through` would pass by without stopping, which is a different journey
-        // and not the one somebody who added a stop is asking for.
-        let body = json!({
-            "locations": stops
-                .iter()
-                .map(|p| json!({ "lat": p.lat, "lon": p.lon, "type": "break" }))
-                .collect::<Vec<_>>(),
-            "costing": mode.costing(),
-            "units": "kilometers",
-            "directions_options": { "language": "en-US" },
-        });
-        let v = self.post("/route", body).await?;
-        let trip = v.get("trip").ok_or_else(|| anyhow!("the routing service sent no trip"))?;
-        let raw = trip.get("legs").and_then(Value::as_array).cloned().unwrap_or_default();
-        if raw.len() + 1 != stops.len() {
-            // Valhalla returns one leg per consecutive pair; anything else means the
-            // request and the answer are describing different journeys.
-            bail!("the routing service answered with {} legs for {} stops", raw.len(), stops.len());
-        }
+        let v = self.post("/route", trip_request(stops, mode)).await?;
+        parse_trip(stops, mode, &v)
+    }
 
-        let mut shape: Vec<[f64; 2]> = Vec::new();
-        let mut legs: Vec<Leg> = Vec::new();
-        for (i, leg) in raw.iter().enumerate() {
-            let base = shape.len();
-            let pts = leg
-                .get("shape")
-                .and_then(Value::as_str)
-                .map(decode_polyline6)
-                .unwrap_or_default();
-            let mut steps = Vec::new();
-            for m in leg.get("maneuvers").and_then(Value::as_array).cloned().unwrap_or_default() {
-                let instruction =
-                    m.get("instruction").and_then(Value::as_str).unwrap_or("").trim().to_string();
-                if instruction.is_empty() {
-                    continue;
-                }
-                steps.push(Step {
-                    instruction,
-                    km: m.get("length").and_then(Value::as_f64).unwrap_or(0.0),
-                    secs: m.get("time").and_then(Value::as_f64).unwrap_or(0.0),
-                    // Offset into the WHOLE trip's shape, not this leg's: the window draws
-                    // one line and highlights a stretch of it.
-                    at: base + m.get("begin_shape_index").and_then(Value::as_u64).unwrap_or(0) as usize,
-                });
-            }
-            let sum = leg.get("summary");
-            legs.push(Leg {
-                from: stops[i].name.clone(),
-                to: stops[i + 1].name.clone(),
-                km: sum.and_then(|s| s.get("length")).and_then(Value::as_f64).unwrap_or(0.0),
-                secs: sum.and_then(|s| s.get("time")).and_then(Value::as_f64).unwrap_or(0.0),
-                steps,
-            });
-            shape.extend(pts);
+    async fn optimize(&self, stops: &[Place], mode: Mode) -> Result<(Vec<Place>, Route)> {
+        if stops.len() < 3 {
+            bail!("two stops have only one order — add a third before optimising");
         }
-        if shape.is_empty() {
-            bail!(
-                "no way to get from {} to {} {}",
-                stops[0].name,
-                stops[stops.len() - 1].name,
-                mode.label()
-            );
+        let v = self.post("/optimized_route", trip_request(stops, mode)).await?;
+        // The visit order comes back as `original_index` per location. Probed live before
+        // this was written: a zigzag of five Istanbul stops came back [0, 1, 3, 2, 4] —
+        // the endpoint reorders, keeps the first and last fixed, and answers in exactly
+        // /route's shape.
+        let order: Vec<usize> = v
+            .get("trip")
+            .and_then(|t| t.get("locations"))
+            .and_then(Value::as_array)
+            .map(|ls| {
+                ls.iter()
+                    .filter_map(|l| l.get("original_index").and_then(Value::as_u64))
+                    .map(|i| i as usize)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut seen = order.clone();
+        seen.sort_unstable();
+        if seen != (0..stops.len()).collect::<Vec<_>>() {
+            bail!("the routing service answered with a visit order that is not a permutation");
         }
-
-        let sum = trip.get("summary");
-        Ok(Route {
-            mode,
-            km: sum.and_then(|s| s.get("length")).and_then(Value::as_f64).unwrap_or(0.0),
-            secs: sum.and_then(|s| s.get("time")).and_then(Value::as_f64).unwrap_or(0.0),
-            stops: stops.iter().map(|p| p.name.clone()).collect(),
-            shape,
-            legs,
-        })
+        let reordered: Vec<Place> = order.iter().map(|&i| stops[i].clone()).collect();
+        let route = parse_trip(&reordered, mode, &v)?;
+        Ok((reordered, route))
     }
 
     async fn reach(&self, at: &Place, minutes: u32, mode: Mode) -> Result<Reach> {
@@ -995,6 +960,89 @@ impl Router for Valhalla {
 
         Ok(Reach { minutes, mode, center: [at.lon, at.lat], from: at.name.clone(), ring })
     }
+}
+
+/// One request body for /route and /optimized_route — they take the same thing.
+fn trip_request(stops: &[Place], mode: Mode) -> Value {
+    json!({
+        // Every stop is a `break`: Valhalla ends a leg and issues an arrival instruction
+        // at each one. `through` would pass by without stopping, which is a different
+        // journey and not the one somebody who added a stop is asking for.
+        "locations": stops
+            .iter()
+            .map(|p| json!({ "lat": p.lat, "lon": p.lon, "type": "break" }))
+            .collect::<Vec<_>>(),
+        "costing": mode.costing(),
+        "units": "kilometers",
+        "directions_options": { "language": "en-US" },
+    })
+}
+
+/// One trip answer, whichever endpoint produced it. `stops` must already be in the visit
+/// order the answer describes.
+fn parse_trip(stops: &[Place], mode: Mode, v: &Value) -> Result<Route> {
+    let trip = v.get("trip").ok_or_else(|| anyhow!("the routing service sent no trip"))?;
+    let raw = trip.get("legs").and_then(Value::as_array).cloned().unwrap_or_default();
+    if raw.len() + 1 != stops.len() {
+        // One leg per consecutive pair; anything else means the request and the answer
+        // are describing different journeys.
+        bail!("the routing service answered with {} legs for {} stops", raw.len(), stops.len());
+    }
+
+    let mut shape: Vec<[f64; 2]> = Vec::new();
+    let mut legs: Vec<Leg> = Vec::new();
+    for (i, leg) in raw.iter().enumerate() {
+        let base = shape.len();
+        let pts = leg
+            .get("shape")
+            .and_then(Value::as_str)
+            .map(decode_polyline6)
+            .unwrap_or_default();
+        let mut steps = Vec::new();
+        for m in leg.get("maneuvers").and_then(Value::as_array).cloned().unwrap_or_default() {
+            let instruction =
+                m.get("instruction").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if instruction.is_empty() {
+                continue;
+            }
+            steps.push(Step {
+                instruction,
+                km: m.get("length").and_then(Value::as_f64).unwrap_or(0.0),
+                secs: m.get("time").and_then(Value::as_f64).unwrap_or(0.0),
+                // Offset into the WHOLE trip's shape, not this leg's: the window draws one
+                // line and highlights a stretch of it.
+                at: base + m.get("begin_shape_index").and_then(Value::as_u64).unwrap_or(0) as usize,
+            });
+        }
+        let sum = leg.get("summary");
+        legs.push(Leg {
+            from: stops[i].name.clone(),
+            to: stops[i + 1].name.clone(),
+            km: sum.and_then(|s| s.get("length")).and_then(Value::as_f64).unwrap_or(0.0),
+            secs: sum.and_then(|s| s.get("time")).and_then(Value::as_f64).unwrap_or(0.0),
+            at: base,
+            steps,
+        });
+        shape.extend(pts);
+    }
+    if shape.is_empty() {
+        bail!(
+            "no way to get from {} to {} {}",
+            stops[0].name,
+            stops[stops.len() - 1].name,
+            mode.label()
+        );
+    }
+
+    let sum = trip.get("summary");
+    Ok(Route {
+        mode,
+        km: sum.and_then(|s| s.get("length")).and_then(Value::as_f64).unwrap_or(0.0),
+        secs: sum.and_then(|s| s.get("time")).and_then(Value::as_f64).unwrap_or(0.0),
+        stops: stops.iter().map(|p| p.name.clone()).collect(),
+        shape,
+        legs,
+    })
 }
 
 /// Valhalla encodes shapes as a Google polyline with **six** decimal digits, not the usual
@@ -1203,6 +1251,10 @@ impl Geo {
 
     pub async fn route(&self, stops: &[Place], mode: Mode) -> Result<Route> {
         self.valhalla.route(stops, mode).await
+    }
+
+    pub async fn optimize(&self, stops: &[Place], mode: Mode) -> Result<(Vec<Place>, Route)> {
+        self.valhalla.optimize(stops, mode).await
     }
 
     pub async fn reach(&self, at: &Place, minutes: u32, mode: Mode) -> Result<Reach> {

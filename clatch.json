@@ -42,7 +42,15 @@
       },
       {
         "name": "route",
-        "about": "plan a trip through any number of stops, by car, bike or on foot"
+        "about": "plan a trip through any number of stops — and reorder them for the shortest journey"
+      },
+      {
+        "name": "next",
+        "about": "advance to the next leg of the route, on both surfaces"
+      },
+      {
+        "name": "back",
+        "about": "previous leg, or back to the whole-trip overview"
       },
       {
         "name": "isochrone",
@@ -93,6 +101,10 @@
       {
         "id": "trip.changed",
         "type": "context"
+      },
+      {
+        "id": "leg",
+        "type": "buffered"
       }
     ]
   }

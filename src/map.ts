@@ -65,7 +65,9 @@ function animates(): boolean {
  * map. A new route, a new reachable area, a different place opened, or a view the core
  * itself set: those are. */
 function frameKey(s: State): string {
-  if (s.route) return `route:${s.route.stops.join(">")}:${s.route.mode}:${s.route.shape.length}`;
+  // The leg is part of the subject: advancing it should re-frame to the new stretch.
+  if (s.route)
+    return `route:${s.route.stops.join(">")}:${s.route.mode}:${s.route.shape.length}:leg${s.leg ?? "-"}`;
   if (s.reach) return `reach:${s.reach.from}:${s.reach.minutes}:${s.reach.mode}`;
   if (s.selected) return `place:${s.selected.id}`;
   return `view:${s.view.lat.toFixed(4)},${s.view.lon.toFixed(4)},${s.view.zoom.toFixed(1)}`;
@@ -90,6 +92,15 @@ function km(aLat: number, aLon: number, bLat: number, bLon: number): number {
     Math.sin(r(bLat - aLat) / 2) ** 2 +
     Math.cos(r(aLat)) * Math.cos(r(bLat)) * Math.sin(r(bLon - aLon) / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+/** The active leg's stretch of the whole trip's shape, by the leg's own offsets. */
+function legSlice(route: NonNullable<State["route"]>, leg: number): [number, number][] | null {
+  const l = route.legs[leg];
+  if (!l) return null;
+  const end = route.legs[leg + 1]?.at ?? route.shape.length;
+  // +1: include the first point of the next leg so the slice reaches the stop itself.
+  return route.shape.slice(l.at, Math.min(end + 1, route.shape.length));
 }
 
 export type MapEvents = {
@@ -208,7 +219,7 @@ export class MapSurface {
   /** Every source and layer this app draws, created once on style load. */
   private install() {
     const m = this.map;
-    for (const id of ["reach", "route", "results", "pins", "selected", "stops"]) {
+    for (const id of ["reach", "route", "route-active", "results", "pins", "selected", "stops"]) {
       m.addSource(id, { type: "geojson", data: EMPTY_FC as never });
     }
 
@@ -252,6 +263,18 @@ export class MapSurface {
         source: "route",
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-color": "#1268D4", "line-width": 5 },
+      },
+      firstSymbol,
+    );
+    // The leg being travelled, over the dimmed rest — one geometry, sliced, not a second
+    // route. Empty at the overview.
+    m.addLayer(
+      {
+        id: "route-active",
+        type: "line",
+        source: "route-active",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": "#0B49A8", "line-width": 7 },
       },
       firstSymbol,
     );
@@ -419,6 +442,22 @@ export class MapSurface {
           }
         : EMPTY_FC,
     );
+    const active = s.route && s.leg !== null ? legSlice(s.route, s.leg) : null;
+    this.set(
+      "route-active",
+      active && active.length > 1
+        ? {
+            type: "FeatureCollection",
+            features: [
+              { type: "Feature", geometry: { type: "LineString", coordinates: active }, properties: {} },
+            ],
+          }
+        : EMPTY_FC,
+    );
+    // The rest of the route steps back while a leg is active, so the eye finds the leg.
+    if (this.map.getLayer("route-line")) {
+      this.map.setPaintProperty("route-line", "line-opacity", active ? 0.35 : 1);
+    }
     this.set(
       "reach",
       s.reach
@@ -433,6 +472,8 @@ export class MapSurface {
 
     this.frame(s);
   }
+
+  /** The active leg's stretch of the whole trip's shape. */
 
   /** Point the camera at whatever this snapshot is about — **if that has changed**.
    *
@@ -451,8 +492,10 @@ export class MapSurface {
     this.frameKey = key;
     this.humanMoved = false;
     // A route or an area is about its whole shape, so frame it rather than centring on a
-    // point somewhere along it.
-    if (s.route && s.route.shape.length > 1) this.fit(s.route.shape);
+    // point somewhere along it — and an active leg is about ITS stretch.
+    const active = s.route && s.leg !== null ? legSlice(s.route, s.leg) : null;
+    if (active && active.length > 1) this.fit(active);
+    else if (s.route && s.route.shape.length > 1) this.fit(s.route.shape);
     else if (s.reach && s.reach.ring.length > 3) this.fit(s.reach.ring);
     else this.goto(s.view.lat, s.view.lon, s.view.zoom);
   }
