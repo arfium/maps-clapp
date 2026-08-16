@@ -15,7 +15,7 @@ import { agentTint, cmd, prefetchAssets, useAsset, useSnapshot } from "@clappkit
 import { MapSurface } from "./map";
 import { CategoryDisc, Icon } from "./icons";
 import {
-  CATEGORIES, CHOOSING, EMPTY, TILE_CLASSES, coords, distance, duration,
+  CHOOSING, EMPTY, TILE_CLASSES, coords, distance, duration,
   type Agent, type Mode, type Place, type Req, type State,
 } from "./bridge";
 
@@ -307,7 +307,7 @@ export default function App() {
         )}
 
         <div className="chips">
-          {CATEGORIES.map((c) => (
+          {state.categories.map((c) => (
             <button
               key={c.q}
               disabled={!somewhere}
@@ -315,7 +315,7 @@ export default function App() {
               onClick={() => category(c.q)}
             >
               <Icon id={c.icon} size={13} />
-              {c.label}
+              {c.q}
             </button>
           ))}
         </div>

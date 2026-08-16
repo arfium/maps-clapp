@@ -786,6 +786,12 @@ impl AppState {
             })).collect::<Vec<_>>(),
             "busy": self.busy,
             "said": self.said,
+            // The chip enum rides EVERY snapshot: the window draws its buttons from this
+            // and the CLI prints the same list, so neither surface can know a word the
+            // other cannot see.
+            "categories": crate::geo::CATEGORIES.iter().map(|(q, icon)| json!({
+                "q": q, "icon": icon,
+            })).collect::<Vec<_>>(),
             "agents": self.agents.iter().map(|a| json!({
                 "id": a.id, "name": a.name, "avatar": a.avatar,
             })).collect::<Vec<_>>(),

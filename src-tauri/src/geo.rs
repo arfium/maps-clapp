@@ -1565,6 +1565,27 @@ pub fn osm_tag(what: &str) -> Option<String> {
     Some(tag.to_string())
 }
 
+/// The category chips — THE canonical enum, owned by the core.
+///
+/// The window renders its buttons from this (via the snapshot) and the CLI prints and
+/// documents the same list, because a vocabulary only one surface can see is a sync
+/// failure: the first agent to use this app tried "restoran", got lucky, and then wrote —
+/// correctly — that it had no way to learn the word "restaurants" existed except from a
+/// screenshot. Each entry is (query, icon id); the query is what BOTH surfaces send, and
+/// a test pins every one of them to [`osm_tag`] so a chip can never dangle.
+pub const CATEGORIES: [(&str, &str); 10] = [
+    ("cafes", "cafe"),
+    ("restaurants", "restaurant"),
+    ("hotels", "hotel"),
+    ("market", "shop"),
+    ("pharmacy", "pharmacy"),
+    ("fuel", "fuel"),
+    ("parking", "parking"),
+    ("atm", "bank"),
+    ("station", "transit"),
+    ("park", "park"),
+];
+
 /// Is this query a *category* rather than a name? The router for "what did they mean":
 /// a category typed into the search box is a radius question wherever the map is looking,
 /// not a text hunt across the index — "restoran" near Kadıköy must never answer with a
@@ -1882,6 +1903,26 @@ mod tests {
         assert!(!is_street_furniture("railway station"));
         assert!(!is_street_furniture("cafe"));
         assert!(!is_street_furniture(""), "an unknown kind is not proof of anything");
+    }
+
+    /// Every chip the window shows must be a query the core understands — otherwise a
+    /// button works and the same word typed does not, which is the sync failure this
+    /// enum exists to prevent.
+    #[test]
+    fn every_category_chip_is_a_word_the_core_understands() {
+        for (q, _) in CATEGORIES {
+            assert!(is_category(q), "chip \"{q}\" is not in osm_tag's vocabulary");
+        }
+    }
+
+    /// The Turkish a Turkish user actually types.
+    #[test]
+    fn the_category_vocabulary_speaks_turkish() {
+        for q in ["restoran", "restoranlar", "kafe", "eczane", "eczaneler", "benzinlik",
+                  "otopark", "market", "otel", "hastane", "cami", "fırın", "durak"] {
+            assert!(is_category(q), "\"{q}\" should be a category");
+        }
+        assert!(!is_category("Galata Kulesi"), "a name is not a category");
     }
 
     #[test]

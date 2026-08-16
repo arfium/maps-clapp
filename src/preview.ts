@@ -396,6 +396,13 @@ const SNAPSHOT: State = {
   ],
   busy: null,
   said: null,
+  categories: [
+    { q: "cafes", icon: "cafe" }, { q: "restaurants", icon: "restaurant" },
+    { q: "hotels", icon: "hotel" }, { q: "market", icon: "shop" },
+    { q: "pharmacy", icon: "pharmacy" }, { q: "fuel", icon: "fuel" },
+    { q: "parking", icon: "parking" }, { q: "atm", icon: "bank" },
+    { q: "station", icon: "transit" }, { q: "park", icon: "park" },
+  ],
   agents: [{ id: "1001", name: "Claude", avatar: null }],
 };
 

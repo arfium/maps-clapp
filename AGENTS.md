@@ -20,6 +20,11 @@ maps pin "meet here" --note "9am" # kept; pins survive searches and routes
 maps export                       # GeoJSON of everything on the map
 ```
 
+`maps nearby` with no query lists the ready-made categories — the same chips the window
+shows, read from the same snapshot — and `status` prints them too. Start there instead of
+guessing words; Turkish works ("restoran", "eczane", "benzin"…), and a category typed
+into `find` is treated as nearby wherever the map is.
+
 `goto` when you want one place and the map moved to it. `find` when you want a list to
 choose from. `nearby` when the question is "what is around here" — it is the only one that
 orders by distance, because the search index does not.

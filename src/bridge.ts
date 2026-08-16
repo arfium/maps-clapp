@@ -114,6 +114,10 @@ export type State = {
   busy: string | null;
   /** The last thing that happened, in one sentence. */
   said: string | null;
+  /** The category chips — the CORE's enum, not the window's. The CLI prints this same
+   *  list (`maps nearby` with no query), so neither surface knows a word the other
+   *  cannot see. */
+  categories: { q: string; icon: string }[];
   agents: Agent[];
 };
 
@@ -132,6 +136,7 @@ export const EMPTY: State = {
   pins: [],
   busy: null,
   said: null,
+  categories: [],
   agents: [],
 };
 
@@ -180,21 +185,6 @@ export function coords(lat: number, lon: number): string {
   return `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
 }
 
-/** The categories the search box offers as one-tap chips. They are ordinary `nearby`
- *  queries — the core maps the ambiguous ones onto OSM tags (geo.rs `osm_tag`), so this
- *  list is about what a person looks for, not about what OSM calls it. */
-export const CATEGORIES = [
-  { q: "cafes", label: "cafes", icon: "cafe" },
-  { q: "restaurants", label: "restaurants", icon: "restaurant" },
-  { q: "hotels", label: "hotels", icon: "hotel" },
-  { q: "supermarket", label: "market", icon: "shop" },
-  { q: "pharmacy", label: "pharmacy", icon: "pharmacy" },
-  { q: "fuel", label: "fuel", icon: "fuel" },
-  { q: "parking", label: "parking", icon: "parking" },
-  { q: "atm", label: "atm", icon: "bank" },
-  { q: "station", label: "station", icon: "transit" },
-  { q: "park", label: "park", icon: "park" },
-] as const;
 
 /** The same categories, in the basemap tiles' own vocabulary.
  *
@@ -209,7 +199,7 @@ export const TILE_CLASSES: Record<string, string[]> = {
   cafes: ["cafe"],
   restaurants: ["restaurant", "fast_food"],
   hotels: ["lodging", "hotel", "hostel", "guest_house"],
-  supermarket: ["grocery", "supermarket", "convenience"],
+  market: ["grocery", "supermarket", "convenience"],
   pharmacy: ["pharmacy"],
   fuel: ["fuel"],
   parking: ["parking"],

@@ -28,6 +28,11 @@ usage:
       -n <N>                        print only the first N (the window keeps all of them)
   maps nearby "<what>"             what is around the middle of the map, NEAREST FIRST
       -n <N>                        print only the first N
+    the ready-made categories — the same chips the window shows:
+      cafes restaurants hotels market pharmacy fuel parking atm station park
+    run `maps nearby` with no query to list them; Turkish works too (restoran,
+    kafe, eczane, benzin, otopark, otel, hastane, cami, fırın, durak, avm…) and
+    a category typed into `find` is treated as nearby wherever the map is
   maps select <N>                  open result number N: address, coordinates, what it is
   maps route "<to>"                from where you are to there
   maps route "<from>" "<to>"       between two places
@@ -104,11 +109,22 @@ pub async fn run(args: Vec<String>) -> ! {
             json!({ "cmd": "goto", "q": f.positional.join(" "), "agent": agent })
         }
 
-        "find" | "nearby" => {
+        "find" => {
             if f.positional.is_empty() {
-                usage(&format!("maps {verb} \"<query>\""));
+                usage("maps find \"<query>\"");
             }
-            json!({ "cmd": verb, "q": f.positional.join(" "), "agent": agent })
+            json!({ "cmd": "find", "q": f.positional.join(" "), "agent": agent })
+        }
+
+        // Bare `nearby` is a QUESTION about the vocabulary, not a mistake: it lists the
+        // category enum — the same list the window's chips draw, read from the same
+        // snapshot, because a word only one surface can see is a sync failure.
+        "nearby" => {
+            if f.positional.is_empty() {
+                json!({ "cmd": "state", "agent": agent })
+            } else {
+                json!({ "cmd": "nearby", "q": f.positional.join(" "), "agent": agent })
+            }
         }
 
         "select" => match f.positional.first().and_then(|s| s.parse::<u64>().ok()) {
@@ -203,6 +219,7 @@ pub async fn run(args: Vec<String>) -> ! {
     }
 
     match verb {
+        "nearby" if f.positional.is_empty() => print_categories(&answer),
         "find" | "nearby" => print_results(&answer, f.number("--n").or(f.number("-n"))),
         "next" | "back" => print_leg(&answer),
         "route" => print_route(&answer),
@@ -405,6 +422,18 @@ fn print_pins(a: &Value) {
     }
 }
 
+/// The category enum, from the snapshot — never from a list this file invents.
+fn print_categories(a: &Value) {
+    let cats: Vec<&str> = a["categories"]
+        .as_array()
+        .map(|c| c.iter().filter_map(|x| x["q"].as_str()).collect())
+        .unwrap_or_default();
+    println!("the ready-made categories (the window shows these as chips):");
+    println!("  {}", cats.join("  "));
+    println!("`maps nearby <category>` searches around the middle of the map, nearest");
+    println!("first. Turkish names work too: restoran, kafe, eczane, benzin, otopark…");
+}
+
 fn print_status(a: &Value) {
     let v = &a["view"];
     let name = v["name"].as_str().unwrap_or("");
@@ -455,6 +484,10 @@ fn print_status(a: &Value) {
     let pins = a["pins"].as_array().map(Vec::len).unwrap_or(0);
     if pins > 0 {
         println!("{pins} pin{}", if pins == 1 { "" } else { "s" });
+    }
+    if let Some(cats) = a["categories"].as_array() {
+        let names: Vec<&str> = cats.iter().filter_map(|c| c["q"].as_str()).collect();
+        println!("categories: {}  (`maps nearby <one>`)", names.join(" "));
     }
     let agents = a["agents"].as_array().cloned().unwrap_or_default();
     if !agents.is_empty() {
@@ -573,6 +606,15 @@ mod tests {
             "export", "status", "focus", "close",
         ] {
             assert!(HELP.contains(&format!("  maps {v}")), "--help does not document `maps {v}`");
+        }
+    }
+
+    /// The enum the window shows must be the enum the manual teaches — the first agent to
+    /// use this app learned "restaurants" from a screenshot, which is the failure.
+    #[test]
+    fn the_help_teaches_every_category_chip() {
+        for (q, _) in crate::geo::CATEGORIES {
+            assert!(HELP.contains(q), "--help does not name the category \"{q}\"");
         }
     }
 
