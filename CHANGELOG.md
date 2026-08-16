@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1
+
+The release the field reports built: category words are radius searches and
+speak Turkish; results wear category icon discs (map, list and suggestions,
+one drawing); the panel's controls are drawn icons; the category enum lives
+in the core and rides every snapshot, so `maps nearby` (bare), `status` and
+`--help` all teach the same chips the window shows; the Dock inset ships as
+a committed artifact so packaging needs no tool and no key.
+
 ## 0.1.0 — first release
 
 A world map on one screen a human and an agent share.

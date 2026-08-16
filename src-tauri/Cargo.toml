@@ -1,6 +1,6 @@
 [package]
 name = "maps"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A world map on one screen a human and an agent share — cross-platform via clappkit + Tauri."
 license = "Apache-2.0"
