@@ -184,16 +184,16 @@ export function coords(lat: number, lon: number): string {
  *  queries — the core maps the ambiguous ones onto OSM tags (geo.rs `osm_tag`), so this
  *  list is about what a person looks for, not about what OSM calls it. */
 export const CATEGORIES = [
-  "cafes",
-  "restaurants",
-  "hotels",
-  "supermarket",
-  "pharmacy",
-  "fuel",
-  "parking",
-  "atm",
-  "station",
-  "park",
+  { q: "cafes", label: "cafes", icon: "cafe" },
+  { q: "restaurants", label: "restaurants", icon: "restaurant" },
+  { q: "hotels", label: "hotels", icon: "hotel" },
+  { q: "supermarket", label: "market", icon: "shop" },
+  { q: "pharmacy", label: "pharmacy", icon: "pharmacy" },
+  { q: "fuel", label: "fuel", icon: "fuel" },
+  { q: "parking", label: "parking", icon: "parking" },
+  { q: "atm", label: "atm", icon: "bank" },
+  { q: "station", label: "station", icon: "transit" },
+  { q: "park", label: "park", icon: "park" },
 ] as const;
 
 /** The same categories, in the basemap tiles' own vocabulary.

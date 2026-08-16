@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { agentTint, cmd, prefetchAssets, useAsset, useSnapshot } from "@clappkit";
 import { MapSurface } from "./map";
+import { CategoryDisc, Icon } from "./icons";
 import {
   CATEGORIES, CHOOSING, EMPTY, TILE_CLASSES, coords, distance, duration,
   type Agent, type Mode, type Place, type Req, type State,
@@ -221,7 +222,7 @@ export default function App() {
             aria-label="Hide the panel"
             onClick={() => setHidden(true)}
           >
-            ‹
+            <Icon id="chevron-left" size={17} />
           </button>
         </header>
 
@@ -232,30 +233,49 @@ export default function App() {
             search(text);
           }}
         >
-          <input
-            ref={searchRef}
-            value={text}
-            placeholder="Search anywhere…  ( / )"
-            onChange={(e) => {
-              typing.current = true;
-              setText(e.target.value);
-            }}
-            onBlur={() => (typing.current = false)}
-          />
-          <button type="submit" disabled={!text.trim()}>
-            Find
+          <div className="searchbox">
+            <Icon id="search" size={15} />
+            <input
+              ref={searchRef}
+              value={text}
+              placeholder="Search anywhere…  /"
+              onChange={(e) => {
+                typing.current = true;
+                setText(e.target.value);
+              }}
+              onBlur={() => (typing.current = false)}
+            />
+            {text && (
+              <button
+                type="button"
+                className="fieldclear"
+                aria-label="Clear the search text"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setText("");
+                  setSuggestions([]);
+                  searchRef.current?.focus();
+                }}
+              >
+                <Icon id="x" size={13} />
+              </button>
+            )}
+          </div>
+          <button type="submit" className="iconbtn solid" disabled={!text.trim()} title="Search" aria-label="Search">
+            <Icon id="search" size={16} />
           </button>
           <button
             type="button"
-            className="ghost"
+            className="iconbtn"
             title="Fly straight to the best match"
+            aria-label="Fly straight to the best match"
             disabled={!text.trim()}
             onClick={() => {
               typing.current = false;
               void say({ cmd: "goto", q: text });
             }}
           >
-            Go
+            <Icon id="arrow-right" size={16} />
           </button>
         </form>
 
@@ -276,9 +296,11 @@ export default function App() {
                   });
                 }}
               >
-                <strong>{p.name}</strong>
-                {p.kind && <em>{p.kind}</em>}
-                {p.address && <span className="addr">{p.address}</span>}
+                <CategoryDisc kind={p.kind} size={22} />
+                <div>
+                  <strong>{p.name}</strong>
+                  {p.address && <span className="addr">{p.address}</span>}
+                </div>
               </li>
             ))}
           </ul>
@@ -287,12 +309,13 @@ export default function App() {
         <div className="chips">
           {CATEGORIES.map((c) => (
             <button
-              key={c}
+              key={c.q}
               disabled={!somewhere}
-              title={somewhere ? `What ${c} are around here` : "Find a place first — “nearby” needs somewhere to be near"}
-              onClick={() => category(c)}
+              title={somewhere ? `What ${c.q} are around here` : "Find a place first — “nearby” needs somewhere to be near"}
+              onClick={() => category(c.q)}
             >
-              {c}
+              <Icon id={c.icon} size={13} />
+              {c.label}
             </button>
           ))}
         </div>
@@ -332,16 +355,23 @@ export default function App() {
 
         <footer className="foot">
           <button onClick={() => void say({ cmd: "pin" })} title="Keep what is open, or where you are">
-            Pin this
+            <Icon id="pin" size={14} /> Pin
           </button>
-          <button onClick={() => void say({ cmd: "isochrone", minutes: 15, mode: "walk" })}>
-            15 min walk
+          <button
+            onClick={() => void say({ cmd: "isochrone", minutes: 15, mode: "walk" })}
+            title="How far 15 minutes on foot reaches from here"
+          >
+            <Icon id="clock" size={14} /> 15 min
           </button>
-          <button className="ghost" onClick={() => void say({ cmd: "clear", what: "all" })}>
-            Clear
+          <button
+            className="ghost"
+            onClick={() => void say({ cmd: "clear", what: "all" })}
+            title="Clear results, trip and reach — pins stay"
+          >
+            <Icon id="trash" size={14} /> Clear
           </button>
-          <button className="ghost" onClick={() => void say({ cmd: "export" })}>
-            Export
+          <button className="ghost" onClick={() => void say({ cmd: "export" })} title="Write the map as GeoJSON">
+            <Icon id="download" size={14} /> Export
           </button>
         </footer>
       </aside>
@@ -355,7 +385,7 @@ export default function App() {
               void say({ cmd: "goto", q: coords(menu.lat, menu.lon) });
             }}
           >
-            What's here?
+            <Icon id="search" size={14} /> What&apos;s here?
           </button>
           <button
             onClick={() => {
@@ -363,7 +393,7 @@ export default function App() {
               void say({ cmd: "pin", at: coords(menu.lat, menu.lon) });
             }}
           >
-            Pin this spot
+            <Icon id="pin" size={14} /> Pin this spot
           </button>
           <button
             onClick={() => {
@@ -371,7 +401,7 @@ export default function App() {
               void say({ cmd: "route", add: coords(menu.lat, menu.lon) });
             }}
           >
-            Add to trip
+            <Icon id="plus" size={14} /> Add to trip
           </button>
         </div>
       )}
@@ -427,9 +457,12 @@ function Results(props: { state: State; somewhere: boolean; onPick: (n: number) 
           className={state.selected?.id === p.id ? "on" : ""}
           onClick={() => onPick(i + 1)}
         >
-          <span className="n">{i + 1}</span>
+          <CategoryDisc kind={p.kind} />
           <div>
-            <strong>{p.name}</strong>
+            <strong>
+              <i className="rown">{i + 1}</i>
+              {p.name}
+            </strong>
             {p.kind && <em>{p.kind}</em>}
             {p.address && <span className="addr">{p.address}</span>}
             {state.selected?.id === p.id && detail && <DetailCard d={detail} />}
@@ -461,7 +494,7 @@ function RoutePanel(props: {
           title="Reorder the middle stops for the shortest journey (first and last stay put)"
           onClick={() => say({ cmd: "route", optimize: true })}
         >
-          ⇅ Best order
+          <Icon id="arrow-down-up" size={14} /> Best order
         </button>
       )}
       <ol className="stops">
@@ -476,8 +509,13 @@ function RoutePanel(props: {
                 p.address && <span className="addr">{p.address}</span>
               )}
             </div>
-            <button className="ghost" title="Remove this stop" onClick={() => say({ cmd: "route", rm: i + 1 })}>
-              ×
+            <button
+              className="ghost iconbtn"
+              title="Remove this stop"
+              aria-label={`Remove stop ${i + 1}`}
+              onClick={() => say({ cmd: "route", rm: i + 1 })}
+            >
+              <Icon id="x" size={13} />
             </button>
           </li>
         ))}
@@ -532,14 +570,16 @@ function RoutePanel(props: {
               disabled={state.leg === null}
               onClick={() => say({ cmd: "leg", dir: "back" })}
             >
-              ‹ Back
+              <Icon id="chevron-left" size={14} /> Back
             </button>
             <span>
               {state.leg === null
                 ? "whole trip"
                 : `leg ${state.leg + 1} of ${state.route.legs.length}`}
             </span>
-            <button onClick={() => say({ cmd: "leg", dir: "next" })}>Next ›</button>
+            <button onClick={() => say({ cmd: "leg", dir: "next" })}>
+              Next <Icon id="chevron-right" size={14} />
+            </button>
           </div>
           {state.route.legs.map((leg, i) => (
             <div key={i} className={state.leg === i ? "leg active" : "leg"}>
@@ -588,13 +628,21 @@ function Pins({ state, say }: { state: State; say: (r: Req) => void }) {
     <ol className="pins">
       {state.pins.map((p, i) => (
         <li key={i}>
+          <span className="catdisc" style={{ background: "var(--pin)", width: 24, height: 24 }} aria-hidden>
+            <Icon id="pin" size={13} />
+          </span>
           <div>
             <strong>{p.name}</strong>
             <span className="addr">{coords(p.lat, p.lon)}</span>
             {p.note && <em>{p.note}</em>}
           </div>
-          <button className="ghost" title="Remove" onClick={() => say({ cmd: "unpin", n: i + 1 })}>
-            ×
+          <button
+            className="ghost iconbtn"
+            title="Remove this pin"
+            aria-label={`Remove pin ${i + 1}`}
+            onClick={() => say({ cmd: "unpin", n: i + 1 })}
+          >
+            <Icon id="x" size={13} />
           </button>
         </li>
       ))}

@@ -63,6 +63,13 @@ Fonts (glyph SDFs) and the icon sprite are served by OpenFreeMap as part of the 
 `assets/icon.svg` is this app's own drawing — a pin on a graticule. It deliberately does
 not resemble the mark of any commercial map service. No vendor's logo is used or implied.
 
+## Icon shapes
+
+The interface and marker glyphs (`src/icons.tsx`) are drawn for this app in one 24×24,
+2px-stroke system; several shapes follow [Lucide](https://lucide.dev) (ISC licence), per
+the house icon standard's rule to take permissively licensed marks rather than approximate
+them by hand. No icon font is embedded; the glyphs ship as paths.
+
 ## Not affiliated
 
 This is an independent client for public, open map services. It is not made by, endorsed

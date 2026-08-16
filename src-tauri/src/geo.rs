@@ -1526,34 +1526,51 @@ const SAME_THING_M: f64 = 300.0;
 /// a search index ("bank" is a financial one and a river's edge; "pharmacy" hits brand
 /// names). Anything not listed is searched as words, which is the better default — OSM has
 /// thousands of tags and guessing wrong returns nothing at all.
-fn osm_tag(what: &str) -> Option<String> {
-    let w = what.trim().to_ascii_lowercase();
-    let tag = match w.trim_end_matches('s') {
-        "cafe" | "coffee" => "amenity:cafe",
-        "restaurant" | "food" => "amenity:restaurant",
-        "bar" | "pub" => "amenity:bar",
-        "hotel" => "tourism:hotel",
-        "supermarket" | "grocery" => "shop:supermarket",
-        "pharmacy" | "chemist" => "amenity:pharmacy",
-        "hospital" => "amenity:hospital",
-        "bank" => "amenity:bank",
-        "atm" => "amenity:atm",
-        "fuel" | "petrol" | "gas station" => "amenity:fuel",
-        "parking" => "amenity:parking",
-        "toilet" | "wc" => "amenity:toilets",
-        "school" => "amenity:school",
-        "museum" => "tourism:museum",
+pub fn osm_tag(what: &str) -> Option<String> {
+    let w = what.trim().to_lowercase();
+    // English plurals and the Turkish -lar/-ler, so "restoranlar" asks the same question
+    // as "restoran". Turkish is first-class here: the user of this app types it.
+    let w = w.trim_end_matches('s');
+    let w = w.strip_suffix("lar").or_else(|| w.strip_suffix("ler")).unwrap_or(w);
+    let tag = match w {
+        "cafe" | "coffee" | "kafe" | "kahve" | "kahveci" => "amenity:cafe",
+        "restaurant" | "food" | "restoran" | "lokanta" | "yemek" => "amenity:restaurant",
+        "bar" | "pub" | "meyhane" => "amenity:bar",
+        "bakery" | "fırın" | "pastane" => "shop:bakery",
+        "hotel" | "otel" => "tourism:hotel",
+        "supermarket" | "grocery" | "market" | "süpermarket" | "bakkal" => "shop:supermarket",
+        "mall" | "avm" => "shop:mall",
+        "pharmacy" | "chemist" | "eczane" => "amenity:pharmacy",
+        "hospital" | "hastane" => "amenity:hospital",
+        "bank" | "banka" => "amenity:bank",
+        "atm" | "bankamatik" => "amenity:atm",
+        "fuel" | "petrol" | "gas station" | "benzin" | "benzinlik" | "benzinci" | "akaryakıt" => {
+            "amenity:fuel"
+        }
+        "parking" | "otopark" => "amenity:parking",
+        "toilet" | "wc" | "tuvalet" => "amenity:toilets",
+        "school" | "okul" => "amenity:school",
+        "museum" | "müze" => "tourism:museum",
+        "mosque" | "cami" | "camii" => "amenity:place_of_worship",
         "park" => "leisure:park",
         "playground" => "leisure:playground",
-        "gym" | "fitness" => "leisure:fitness_centre",
-        "station" => "railway:station",
-        "bus stop" => "highway:bus_stop",
-        "airport" => "aeroway:aerodrome",
-        "charger" | "ev charger" | "charging" => "amenity:charging_station",
-        "viewpoint" => "tourism:viewpoint",
+        "gym" | "fitness" | "spor salonu" => "leisure:fitness_centre",
+        "station" | "istasyon" | "gar" | "metro" => "railway:station",
+        "bus stop" | "durak" | "otobüs durağı" => "highway:bus_stop",
+        "airport" | "havalimanı" | "havaalanı" => "aeroway:aerodrome",
+        "charger" | "ev charger" | "charging" | "şarj" => "amenity:charging_station",
+        "viewpoint" | "manzara" => "tourism:viewpoint",
         _ => return None,
     };
     Some(tag.to_string())
+}
+
+/// Is this query a *category* rather than a name? The router for "what did they mean":
+/// a category typed into the search box is a radius question wherever the map is looking,
+/// not a text hunt across the index — "restoran" near Kadıköy must never answer with a
+/// well-named restaurant four towns over.
+pub fn is_category(q: &str) -> bool {
+    osm_tag(q).is_some()
 }
 
 /// "41.0082, 28.9784" or "41.0082 28.9784" → a point. Anything else is a name.

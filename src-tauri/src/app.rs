@@ -236,6 +236,15 @@ pub async fn apply(ctx: &Ctx, req: &Value, caller: Option<String>) -> Reply {
 
         "find" | "nearby" => {
             let q = text("q");
+            // A category word typed into search IS a nearby question. "restoran" in the
+            // box used to hunt the name index and proudly return a restaurant four towns
+            // over; when the map is somewhere, a category means "around here".
+            let cmd = if cmd == "find" && crate::geo::is_category(&q) {
+                let s = ctx.state.lock().await;
+                if s.bias().is_some() { "nearby" } else { cmd }
+            } else {
+                cmd
+            };
             if q.is_empty() {
                 bad(if cmd == "find" {
                     "find what? give me something to look for"

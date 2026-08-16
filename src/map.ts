@@ -21,6 +21,7 @@
 
 import maplibregl, { Map as MLMap, MapGeoJSONFeature } from "maplibre-gl";
 import type { State } from "./bridge";
+import { CATEGORIES_META, categoryOf, markerImage } from "./icons";
 
 /// OpenFreeMap's styles: OpenStreetMap data, no API key, no registration, no limit, and
 /// both host their own glyphs and sprite. Attribution is required and MapLibre adds it
@@ -197,7 +198,14 @@ export class MapSurface {
     // snapshot the world was last shown.
     const boot = () => {
       if (this.map.getSource("route")) return;
-      this.install();
+      // `styledata` also fires WHILE the replacement style is still loading, and adding a
+      // source then throws mid-install. The event keeps firing as the style settles, so a
+      // failed attempt simply waits for the next one — the guard above makes retry free.
+      try {
+        this.install();
+      } catch {
+        return;
+      }
       this.ready = true;
       if (this.framed) {
         const again = this.framed;
@@ -206,15 +214,23 @@ export class MapSurface {
         this.apply(again);
       }
     };
+    // ALWAYS on the event, not only when the first style is slow: when the style loads
+    // fast (cached), the old `else` branch skipped registration entirely — and then the
+    // first theme switch swept our layers with nobody left to rebuild them. Found by
+    // cycling styles in a probe: no errors, no layers, no listener.
+    this.map.on("styledata", boot);
     if (this.map.isStyleLoaded()) boot();
-    else this.map.on("styledata", boot);
 
     // Follow the OS theme. The one deliberate exception to "the map is created once and
     // never re-styled": this IS a re-style, the user asked for it system-wide, and the
     // boot above rebuilds our layers when the new style lands.
     if (typeof matchMedia === "function") {
       matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
-        this.map.setStyle(themeStyle(e.matches));
+        // diff:false, deliberately. The default diffing fires `styledata` while the OLD
+        // sources still exist — boot looks, sees everything in place, stands down — and
+        // only then sweeps them, with no further event to rebuild on. A theme change is a
+        // full replacement; load it as one and boot rebuilds on the fresh style's events.
+        this.map.setStyle(themeStyle(e.matches), { diff: false });
       });
     }
 
@@ -251,6 +267,13 @@ export class MapSurface {
   /** Every source and layer this app draws, created once on style load. */
   private install() {
     const m = this.map;
+    // The category markers. Registered here because a style switch drops images with
+    // everything else; `markerImage` draws them at 2× for retina.
+    for (const id of Object.keys(CATEGORIES_META)) {
+      if (!m.hasImage(`cat-${id}`)) {
+        m.addImage(`cat-${id}`, markerImage(id), { pixelRatio: 2 });
+      }
+    }
     for (const id of ["reach", "route", "route-active", "results", "pins", "selected", "stops"]) {
       m.addSource(id, { type: "geojson", data: EMPTY_FC as never });
     }
@@ -326,40 +349,34 @@ export class MapSurface {
       type: "circle",
       source: "selected",
       paint: {
-        "circle-radius": 14,
+        "circle-radius": 19,
         "circle-color": "#0E9F70",
-        "circle-opacity": 0.25,
+        "circle-opacity": 0.22,
         "circle-stroke-width": 2,
         "circle-stroke-color": "#0B8A66",
       },
     });
+    // A result is its KIND, at a glance: the fuel pump on blue, the cup on brown — the
+    // same disc the panel's list rows wear, from the same drawing. The label rides under
+    // and may drop in a crowd (text-optional); the disc itself never does, because a
+    // result you cannot see is not a result.
     m.addLayer({
       id: "results",
-      type: "circle",
-      source: "results",
-      paint: {
-        "circle-radius": 7,
-        "circle-color": "#0E9F70",
-        "circle-stroke-width": 2,
-        "circle-stroke-color": "#FFFFFF",
-      },
-    });
-    m.addLayer({
-      id: "results-label",
       type: "symbol",
       source: "results",
       layout: {
+        "icon-image": ["concat", "cat-", ["get", "cat"]],
+        "icon-size": 1,
+        "icon-allow-overlap": true,
         "text-field": ["get", "label"],
         "text-font": ["Noto Sans Regular"],
-        "text-size": 12,
-        "text-offset": [0, 1.1],
+        "text-size": 11.5,
+        "text-offset": [0, 1.35],
         "text-anchor": "top",
-        // Let MapLibre drop labels that would collide rather than drawing a smear. This is
-        // the default, and it is the right one here.
         "text-optional": true,
       },
       paint: {
-        "text-color": "#123",
+        "text-color": "#26332e",
         "text-halo-color": "#FFFFFF",
         "text-halo-width": 1.6,
       },
@@ -434,7 +451,7 @@ export class MapSurface {
       features: s.results.map((p, i) => ({
         type: "Feature",
         geometry: { type: "Point", coordinates: [p.lon, p.lat] },
-        properties: { n: i + 1, label: p.name, kind: p.kind },
+        properties: { n: i + 1, label: p.name, kind: p.kind, cat: categoryOf(p.kind) },
       })),
     });
     this.set("pins", {
