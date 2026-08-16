@@ -174,12 +174,16 @@ macos_app_bundle() { # <dist> <cli> <display-name> <id> <version> <src-icon-png>
   # sibling-checkout path stays as a dev shortcut. And there is deliberately NO silent
   # full-bleed fallback any more: it shipped a Dock icon that towered over its neighbours
   # on exactly the machines nobody was watching.
-  if "$ROOT/clappkit/target/release/dock-icon" "$_icon" "$_pad" 2>/dev/null \
-     || "$ROOT/../clappkit/target/release/dock-icon" "$_icon" "$_pad" 2>/dev/null \
-     || cargo run --quiet --release -p clappkit --bin dock-icon \
-          --manifest-path "$ROOT/src-tauri/Cargo.toml" -- "$_icon" "$_pad" 2>/dev/null; then :; else
-    fail "could not build the inset Dock icon (clappkit dock-icon) — refusing to ship a
-      full-bleed .icns that would tower over every icon beside it"
+  # The committed inset (scripts/make-ico.py writes it next to icon.png) is the normal
+  # path: no tool, no sibling checkout, no key — it works on every runner. The dock-icon
+  # binaries stay as dev fallbacks; the one thing that never happens is silently shipping
+  # the full-bleed icon.
+  if [ -f "$ROOT/assets/icon-dock.png" ]; then
+    cp "$ROOT/assets/icon-dock.png" "$_pad"
+  elif "$ROOT/clappkit/target/release/dock-icon" "$_icon" "$_pad" 2>/dev/null \
+     || "$ROOT/../clappkit/target/release/dock-icon" "$_icon" "$_pad" 2>/dev/null; then :; else
+    fail "no assets/icon-dock.png and no clappkit dock-icon binary — run \`npm run icon\`;
+      refusing to ship a full-bleed .icns that would tower over every icon beside it"
   fi
   _set="$_work/$_cli.iconset"; mkdir -p "$_set"
   for _s in 16 32 128 256 512; do
