@@ -11,7 +11,7 @@ correct, keep it honest about what has actually been proven. Small is a feature.
   yourself writing a data-dir resolver, an atomic save, a window verb or an IPC relay,
   stop — clappkit already has it, and a fifth copy is how the family drifted apart.
 - **The contract is the Clatch spec.** The normative truth is
-  [`docs/protocol.md`](../docs/protocol.md) (The Clapp Protocol), backed by the
+  [`docs/protocol.md`](../clappkit/docs/protocol.md) (The Clapp Protocol), backed by the
   [Clatch repo](https://github.com/arfium/clatch)'s `reference/`. On conflict, the
   protocol wins.
 - **The three must agree.** `clatch.json`, `src-tauri/src/main.rs`'s `APP_ID`, and the
@@ -19,7 +19,7 @@ correct, keep it honest about what has actually been proven. Small is a feature.
   `whatsapp --help` must document exactly the verbs `connector.commands` declares, since
   that list is the permission grain (`Bash(whatsapp <verb>:*)`). `clatch validate` checks
   the manifest against the files; nothing checks that the Rust matches it, so keep them
-  in lockstep (see [`docs/TEMPLATE.md`](../docs/TEMPLATE.md)).
+  in lockstep (see [`docs/TEMPLATE.md`](../clappkit/docs/TEMPLATE.md)).
 - **Build with `npm run build`, never a bare `cargo build --release`.** Tauri's
   `custom-protocol` feature is enabled by the Tauri CLI, not by cargo; a plain cargo
   release binary points the webview at the dev URL and opens a white window.
