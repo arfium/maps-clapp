@@ -19,7 +19,7 @@ correct, keep it honest about what has actually been proven. Small is a feature.
   `whatsapp --help` must document exactly the verbs `connector.commands` declares, since
   that list is the permission grain (`Bash(whatsapp <verb>:*)`). `clatch validate` checks
   the manifest against the files; nothing checks that the Rust matches it, so keep them
-  in lockstep (see [`docs/TEMPLATE.md`](../clappkit/docs/TEMPLATE.md)).
+  in lockstep (see [`docs/template.md`](../clappkit/docs/template.md)).
 - **Build with `npm run build`, never a bare `cargo build --release`.** Tauri's
   `custom-protocol` feature is enabled by the Tauri CLI, not by cargo; a plain cargo
   release binary points the webview at the dev URL and opens a white window.

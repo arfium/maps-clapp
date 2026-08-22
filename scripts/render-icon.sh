@@ -2,7 +2,7 @@
 # `npm run icon` — assets/icon.svg → the two raster forms every platform needs:
 #
 #   assets/icon.png          the clapp icon the Clapp Protocol fixes (square PNG,
-#                            512–1024, ≤1 MiB; docs/ICONS.md) — the library tile, the Dock,
+#                            512–1024, ≤1 MiB; docs/icons.md) — the library tile, the Dock,
 #                            and the bytes the running app sets as its own icon.
 #   src-tauri/icons/icon.ico the Windows resource compiled INTO the exe. tauri-build reads
 #                            it from the first .ico in tauri.conf.json's bundle.icon and

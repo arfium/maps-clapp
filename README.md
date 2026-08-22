@@ -113,8 +113,8 @@ src/
 
 Everything else — the icon, the window verbs, the IPC relay, the snapshot revisions — is
 [clappkit](https://github.com/arfium/clappkit), a public submodule. Read
-`clappkit/docs/ARCHITECTURE.md` for how a clapp is put together and
-`clappkit/docs/PLAYBOOK.md` for the rules learned by getting them wrong.
+`clappkit/docs/architecture.md` for how a clapp is put together and
+`clappkit/docs/playbook.md` for the rules learned by getting them wrong.
 
 ## Attribution
 
