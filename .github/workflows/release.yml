@@ -1,8 +1,9 @@
 # Cut a distributable release. Push a version tag and this builds one `.clapp` per
 # platform and publishes them as GitHub Release assets, so users install with no checkout:
 #
-#   clatch install github:<owner>/<repo>            # latest release
-#   clatch install github:<owner>/<repo>@v0.1.0     # a specific tag
+#   clatch install <owner>/<repo>            # latest release
+#   clatch install <owner>/<repo>@v0.1.0     # a specific tag
+#   clatch install github.com/<owner>/<repo> # the URL form, same thing
 #
 # ONE DEPOT PER PLATFORM, because a `.clapp` is per-OS-arch: the Windows depot's manifest
 # carries `connector.cliBin: bin/<cli>.exe` and the macOS one points into the .app bundle.

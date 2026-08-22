@@ -4,7 +4,7 @@ A world map on one screen you and your agent share. Wherever either of you looks
 or routes, the other is looking at it too.
 
 ```sh
-clatch install github:arfium/maps-clapp
+clatch install arfium/maps-clapp
 clatch run com.arfium.maps
 ```
 
