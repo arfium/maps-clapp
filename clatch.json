@@ -1,5 +1,6 @@
 {
   "manifestVersion": 1,
+  "type": "clapp",
   "id": "com.arfium.maps",
   "name": "Maps",
   "description": "A world map on one screen you and your agent share. Wherever either of you looks, searches or routes, the other is looking at it too.",
@@ -15,7 +16,6 @@
   "launch": {
     "macos": "bin/maps",
     "windows": "bin/maps.exe",
-    "linux": "bin/maps",
     "args": [
       "app"
     ]

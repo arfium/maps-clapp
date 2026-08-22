@@ -71,6 +71,25 @@ if (manifest.launch?.windows) {
   check(manifest.launch.windows.endsWith(".exe"), "launch.windows must name a .exe");
 }
 
+// ── 1b. every advertised platform is a platform the release actually ships ───────────
+// The OS keys in `launch` ARE the advertised platforms (clappkit/docs/format.md
+// § Distribution), and the launcher only finds that out at install, in front of a user:
+// `no .clapp for linux-x64 in this release`. The release workflow's matrix is the list of
+// depots that will exist, so the two are checkable against each other right here.
+//
+// Architecture is NOT in the manifest — the asset name is the only place it is decided —
+// so this compares operating systems and nothing else.
+const releaseYml = "\.github/workflows/release.yml";
+if (fs.existsSync(path.join(ROOT, releaseYml))) {
+  const shipped = new Set(
+    [...read(releaseYml).matchAll(/^\s*target:\s*(macos|windows|linux)-\w+/gm)].map((m) => m[1]),
+  );
+  for (const os of launchKeys) {
+    check(shipped.has(os), `clatch.json advertises \`launch.${os}\`, which ${releaseYml} never builds ` +
+      "— drop the key or ship the depot");
+  }
+}
+
 // ── 2. the four places the version and the identity are written ──────────────────────
 same("version",
   ["clatch.json", manifest.version],
