@@ -282,7 +282,8 @@ export class MapSurface {
     // layer" — the usual advice — is wrong on both styles this app ships: liberty puts
     // one-way arrows and BRIDGES after its first symbol (routes vanished under
     // overpasses), and dark begins with `water_name` at index 8, before any road at all
-    // (the route sank under the whole city — "rota altta kaldı", live). The anchor that
+    // (the route sank under the whole city — reported live, as "the route ended up
+    // underneath"). The anchor that
     // means what we want is the first symbol AFTER the last geometry layer.
     const layers = m.getStyle().layers ?? [];
     let lastGeom = -1;
