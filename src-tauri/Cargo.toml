@@ -32,19 +32,3 @@ sys-locale = "0.3"
 # Three open services: Photon (search), Nominatim (precise address + reverse), Valhalla
 # (routing, isochrones). rustls, never native-tls, so the build stays portable.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-
-# clappkit pins the clatch crates to a private repository over ssh://. Building this app
-# must not depend on having a key for that repository — not on a CI runner, not on a fresh
-# machine, not in five years — so the crates are VENDORED at the pinned tag (vendor/clatch,
-# copied verbatim from tag v0.4.3) and this patch points cargo at that copy instead.
-#
-# clappkit itself is public now and rides as a plain submodule; only clatch still needs
-# this. The URL below has to match clappkit's dependency URL exactly, character for
-# character; that is how cargo knows which source it is replacing. Refresh with
-# scripts/vendor-clatch.sh <tag>. `cargo build --offline --locked` is the standing proof
-# that nothing private is reached.
-[patch."ssh://git@github.com/arfium/clatch.git"]
-clatch-core     = { path = "../vendor/clatch/crates/clatch-core" }
-clatch-ipc      = { path = "../vendor/clatch/crates/clatch-ipc" }
-clatch-pipe     = { path = "../vendor/clatch/crates/clatch-pipe" }
-clatch-registry = { path = "../vendor/clatch/crates/clatch-registry" }

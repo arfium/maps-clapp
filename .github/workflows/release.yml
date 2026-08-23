@@ -13,8 +13,8 @@
 # macOS and Windows only — same as CI, and for the same reason. Nothing published here is
 # built anywhere else, so a platform we do not build is a platform we do not ship.
 #
-# NOTHING TO CONFIGURE: clappkit is a public submodule and the clatch crates are vendored at
-# their pinned tag, so a runner builds this with no secret, no submodule token and no key.
+# NOTHING TO CONFIGURE: clappkit is a public submodule and depends on nothing private, so a
+# runner builds this with no secret, no submodule token and no key.
 name: Release
 
 on:

@@ -8,8 +8,8 @@
 # macOS rather than taking a third runner, and Release triggers on tags only — so no
 # platform is ever built twice for one push.
 #
-# Nothing to configure: clappkit is a PUBLIC submodule and the clatch crates are vendored at
-# their pinned tag, so every job runs on a bare runner with no secret and no key.
+# Nothing to configure: clappkit is a PUBLIC submodule and depends on nothing private, so
+# every job runs on a bare runner with no secret and no key.
 #
 # `clatch validate` needs the private Clatch binary and `npm run verify` needs a desktop
 # session, so both stay local gates. Build + test + package is what CI can honestly assert.
@@ -81,10 +81,10 @@ jobs:
         if: matrix.os == 'macos-14'
         run: node scripts/check-manifest.mjs
 
-      # THE PROOF that nothing private is reachable. This runner holds no ssh key, so if
-      # the [patch] in Cargo.toml ever stopped redirecting clappkit's clatch dependency to
-      # vendor/clatch, cargo would try `ssh://git@github.com/arfium/clatch.git` here and
-      # fail on authentication. `--locked` adds that the lockfile is honest.
+      # THE PROOF that nothing private is reachable. This runner holds no ssh key, so a
+      # dependency that reached for one would fail on authentication right here. clappkit
+      # used to pull four crates from a private repository, which is what made this check
+      # necessary in the first place. `--locked` adds that the lockfile is honest.
       #
       # NOT `--offline`: that also forbids crates.io, which a fresh runner has never
       # downloaded — it passes locally only because a developer's registry cache is warm.
