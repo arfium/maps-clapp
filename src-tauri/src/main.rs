@@ -18,19 +18,14 @@ mod app;
 mod cli;
 mod geo;
 mod state;
-mod webview;
 
 const APP_ID: &str = "com.arfium.maps";
 const CLI: &str = "maps";
 
 fn main() {
-    // Windows draws this window with the Edge WebView2 Runtime, which is not part of the
-    // app — and this app leans on it harder than most, because the map is WebGL. Checked
-    // here, before Tauri looks for it, so a missing runtime is a sentence with a download
-    // link instead of a modal dialog from a loader nobody has heard of. A no-op everywhere
-    // else, and never on the CLI path — `maps --help` needs no webview.
-    clappkit::role::main_dispatch(APP_ID, CLI, cli::run, || {
-        webview::ensure(CLI);
-        app::run()
-    })
+    // This app leans on the webview harder than most — the map is WebGL — and on Windows
+    // that runtime is not part of the app. `main_dispatch` proves it is there before Tauri
+    // looks, so a missing one is a sentence with a download link rather than a modal from a
+    // loader nobody has heard of.
+    clappkit::role::main_dispatch(APP_ID, CLI, cli::run, app::run)
 }
