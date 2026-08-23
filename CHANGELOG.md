@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0
+
+The SDK moved under the app and Windows became a platform it ships rather than
+claims. clappkit stopped carrying the launcher and became the SDK: the WebView2 check
+now runs before the window opens (webview.rs here was deleted), the media quarantine
+refuses extensions that run, and binds are born all-open. The README is about maps
+again — what every Clatch app is lives in clappkit/docs. The Linux claim is gone; it
+was never exercised.
+
 ## 0.1.1
 
 The release the field reports built: category words are radius searches and
