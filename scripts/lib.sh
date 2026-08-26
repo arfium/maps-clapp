@@ -40,6 +40,19 @@ manifest() {
 # Print the depot-relative path a manifest declares for one of the three things that
 # must physically exist in the depot — `cliBin`, `launch` or `icon` — resolved for an
 # OS. Empty output means "not declared for this OS", which is not an error.
+# Every presentation asset the manifest declares, one per line: icon, banner and each
+# photo. A depot must contain what its manifest promises — a declared asset that is not in
+# it fails at the USER's `clatch install`, not here.
+manifest_assets() {
+  node -e '
+    const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const out = [m.icon, m.banner, ...(Array.isArray(m.photos) ? m.photos : [])];
+    // A trailing newline, deliberately: `while read` drops a last line that has none,
+    // which silently skipped whichever asset happened to be last.
+    for (const a of out.filter(Boolean)) process.stdout.write(a + "\n");
+  ' "$ROOT/clatch.json"
+}
+
 manifest_path() { # <manifest> <cliBin|launch|icon> <os>
   node -e '
     const [file, kind, os] = process.argv.slice(1);
