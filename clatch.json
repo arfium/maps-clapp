@@ -13,6 +13,7 @@
   "version": "0.2.0",
   "protocol": 2,
   "icon": "assets/icon.png",
+  "banner": "assets/banner.png",
   "launch": {
     "macos": "bin/maps",
     "windows": "bin/maps.exe",
