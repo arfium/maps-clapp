@@ -90,6 +90,33 @@ if (fs.existsSync(path.join(ROOT, releaseYml))) {
   }
 }
 
+// ── 1c. the pictures the manifest declares are within the format's bounds ────────────
+// The launcher checks these at install, in front of the user. A banner one kilobyte over
+// the ceiling is a package that builds, packs, uploads and then refuses to install — and
+// the generator's own assertion only covers the ones it draws, not the ones composed by
+// hand, which are exactly the ones big enough to go over.
+const png = (buf) => buf.length > 24 && buf.readUInt32BE(0) === 0x89504e47;
+for (const [field, rule] of [["icon", { square: true, min: 512, max: 1024, kib: 1024, png: true }],
+                             ["banner", { minW: 3440, minH: 512, aspect: 215 / 32, kib: 2048 }]]) {
+  const rel = manifest[field];
+  if (!rel) continue;
+  const file = path.join(ROOT, rel);
+  if (!fs.existsSync(file)) { check(false, `clatch.json declares ${field} ${rel}, which is not in this repo`); continue; }
+  const buf = fs.readFileSync(file);
+  const kib = Math.round(buf.length / 1024);
+  check(kib <= rule.kib, `${rel} is ${kib} KiB; the limit is ${rule.kib / 1024} MiB`);
+  if (rule.png) check(png(buf), `${rel} must be a PNG — it is the desktop app icon`);
+  if (!png(buf)) continue;                       // only PNG dimensions are read here
+  const [w, h] = [buf.readUInt32BE(16), buf.readUInt32BE(20)];
+  if (rule.square) {
+    check(w === h, `${rel} is ${w}x${h}; an icon is square`);
+    check(w >= rule.min && w <= rule.max, `${rel} is ${w}px; an icon is ${rule.min}-${rule.max}`);
+  } else {
+    check(w >= rule.minW && h >= rule.minH, `${rel} is ${w}x${h}; a banner is at least ${rule.minW}x${rule.minH}`);
+    check(Math.abs(w / h - rule.aspect) < 0.05, `${rel} is ${(w / h).toFixed(2)}:1; a banner is 215:32`);
+  }
+}
+
 // ── 2. the four places the version and the identity are written ──────────────────────
 same("version",
   ["clatch.json", manifest.version],
